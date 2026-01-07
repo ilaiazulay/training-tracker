@@ -1,0 +1,150 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum Gender {
+  MALE
+  FEMALE
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  passwordHash String?
+  googleId     String?  @unique
+  name         String
+  planType     PlanType
+  createdAt    DateTime @default(now())
+
+  gender                 Gender?
+  age                    Int?
+  heightCm               Int?
+  hasCompletedOnboarding Boolean @default(false)
+
+  hasConfiguredPlan Boolean @default(false)
+
+  workouts     Workout[]
+  exercises    Exercise[] @relation("UserExercises")
+  trainingDays UserTrainingDay[]
+}
+
+model Exercise {
+  id              Int      @id @default(autoincrement())
+  name            String
+  muscleGroup     MuscleGroup
+  imageUrl        String?
+  isGlobal        Boolean  @default(false)
+  createdByUserId Int?
+  createdByUser   User?    @relation("UserExercises", fields: [createdByUserId], references: [id])
+
+  workoutExercises WorkoutExercise[]
+  userTrainingDayExercises UserTrainingDayExercise[]
+}
+
+model Workout {
+  id        Int       @id @default(autoincrement())
+  user      User      @relation(fields: [userId], references: [id])
+  userId    Int
+  date      DateTime
+  planDay   String
+  status    WorkoutStatus @default(PLANNED)
+  createdAt DateTime @default(now())
+
+  exercises WorkoutExercise[]
+}
+
+model WorkoutExercise {
+  id         Int       @id @default(autoincrement())
+  workout    Workout   @relation(fields: [workoutId], references: [id])
+  workoutId  Int
+  exercise   Exercise  @relation(fields: [exerciseId], references: [id])
+  exerciseId Int
+  orderIndex Int
+  targetSets Int
+
+  sets          Set[]
+  dropSetGroups DropSetGroup[]
+}
+
+model UserTrainingDay {
+  id        Int      @id @default(autoincrement())
+  user      User     @relation(fields: [userId], references: [id])
+  userId    Int
+
+  dayKey    String
+  label     String
+  notes     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  exercises UserTrainingDayExercise[]
+}
+
+model UserTrainingDayExercise {
+  id             Int             @id @default(autoincrement())
+  trainingDay    UserTrainingDay @relation(fields: [trainingDayId], references: [id])
+  trainingDayId  Int
+
+  exercise       Exercise        @relation(fields: [exerciseId], references: [id])
+  exerciseId     Int
+
+  orderIndex     Int
+}
+
+model Set {
+  id                 Int             @id @default(autoincrement())
+  workoutExercise    WorkoutExercise @relation(fields: [workoutExerciseId], references: [id])
+  workoutExerciseId  Int
+  setIndex           Int
+
+  kind               SetKind         @default(NORMAL)
+  weight             Float
+  reps               Int
+
+  dropGroupId        Int?
+  dropGroup          DropSetGroup?   @relation(fields: [dropGroupId], references: [id], onDelete: Cascade)
+}
+
+model DropSetGroup {
+  id                Int             @id @default(autoincrement())
+  workoutExercise   WorkoutExercise @relation(fields: [workoutExerciseId], references: [id], onDelete: Cascade)
+  workoutExerciseId Int
+  createdAt         DateTime @default(now())
+  sets              Set[]
+}
+
+enum SetKind {
+  NORMAL
+  DROP_MAIN
+  DROP_PART
+}
+
+enum PlanType {
+  AB
+  ABC
+  ABCD
+  FULL_BODY
+}
+
+enum MuscleGroup {
+  CHEST
+  BACK
+  SHOULDERS
+  TRICEPS
+  BICEPS
+  LEGS
+  CORE
+  TRAPS
+  FOREARMS
+}
+
+enum WorkoutStatus {
+  PLANNED
+  COMPLETED
+}
