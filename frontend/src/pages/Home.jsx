@@ -2,13 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import AuthCard from "../components/AuthCard";
 import ErrorAlert from "../components/ErrorAlert";
-import { getAuthData } from "../auth";
+import { getAuthData, clearAuthData } from "../auth";
 
 import ProgressCard from "../components/home/ProgressCard";
 import TodayCard from "../components/home/TodayCard";
 import BottomNav from "../components/BottomNav";
 
-// ✅ NEW
 import Modal from "../components/Modal";
 import { useModal } from "../components/UseModal";
 
@@ -43,54 +42,51 @@ function minutesSince(isoOrDate) {
 
 export default function Home() {
   const nav = useNavigate();
-  const authData = getAuthData();
+  
+  // ✅ Initialize auth state immediately to prevent flicker
+  const [authData] = useState(() => getAuthData());
   const token = authData?.tokens?.accessToken;
 
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [today, setToday] = useState(null);
-
   const [selectedWorkout, setSelectedWorkout] = useState("");
-
   const [activeWorkoutFull, setActiveWorkoutFull] = useState(null);
   const [busy, setBusy] = useState(false);
 
-  // ✅ NEW: modals
   const confirmNewWorkout = useModal();
   const infoModal = useModal();
 
-  // tick every minute for Total Time refresh
   const [minuteTick, setMinuteTick] = useState(0);
   useEffect(() => {
     const t = setInterval(() => setMinuteTick((x) => x + 1), 60000);
     return () => clearInterval(t);
   }, []);
 
+  // ✅ Stable Auth Check
   useEffect(() => {
-    if (!authData) nav("/");
-  }, [authData, nav]);
+    if (!authData || !token) {
+      nav("/");
+    }
+  }, [authData, token, nav]);
 
   function logout() {
-    localStorage.removeItem("auth"); // change if your key differs
+    clearAuthData();
     nav("/");
   }
 
   async function loadHome() {
     if (!token) return;
-
     try {
       setError("");
       setLoading(true);
-
       const res = await fetch(`${API_BASE_URL}/workout/today`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || "Failed to load home");
 
       setToday(data);
-
       const defaultKey =
         data?.activeWorkout?.planDay ||
         data?.recommendedDayKey ||
@@ -105,60 +101,43 @@ export default function Home() {
   }
 
   useEffect(() => {
-    loadHome();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (token) loadHome();
   }, [token]);
 
   const activeWorkout = today?.activeWorkout || null;
   const activeWorkoutId = activeWorkout?.id || null;
 
   useEffect(() => {
-    if (!token) return;
-
-    if (!activeWorkoutId) {
+    if (!token || !activeWorkoutId) {
       setActiveWorkoutFull(null);
       return;
     }
 
     let cancelled = false;
-
     (async () => {
       try {
         const res = await fetch(`${API_BASE_URL}/workouts/${activeWorkoutId}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
-
         const data = await res.json().catch(() => ({}));
         if (!res.ok) return;
-
         if (!cancelled) setActiveWorkoutFull(data.workout);
-      } catch {
-        // ignore
-      }
+      } catch { /* ignore */ }
     })();
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [token, activeWorkoutId]);
 
   const hasActiveToday = !!activeWorkoutId && isFromToday(activeWorkout);
-
-  const hasActiveForSelected =
-    hasActiveToday &&
-    activeWorkout?.planDay &&
-    activeWorkout.planDay === selectedWorkout;
+  const hasActiveForSelected = hasActiveToday && activeWorkout?.planDay === selectedWorkout;
 
   const progress = useMemo(() => {
     if (!activeWorkoutFull?.exercises?.length) return null;
-
     const total = activeWorkoutFull.exercises.length;
     let done = 0;
     for (const we of activeWorkoutFull.exercises) {
       if ((we?.sets?.length || 0) > 0) done += 1;
     }
-    const pct = total === 0 ? 0 : Math.round((done / total) * 100);
-    return { done, total, pct };
+    return { done, total, pct: Math.round((done / total) * 100) };
   }, [activeWorkoutFull]);
 
   const currentExerciseName = useMemo(() => {
@@ -169,48 +148,38 @@ export default function Home() {
   }, [activeWorkoutFull]);
 
   const totalMins = useMemo(() => {
-    // uses minuteTick so it recalculates every minute
     void minuteTick;
     return minutesSince(activeWorkout?.createdAt || activeWorkout?.date);
   }, [activeWorkout?.createdAt, activeWorkout?.date, minuteTick]);
 
   async function onContinue() {
-    if (!activeWorkoutId) return;
-    nav(`/workout/${activeWorkoutId}`);
+    if (activeWorkoutId) nav(`/workout/${activeWorkoutId}`);
   }
 
-  // ✅ helper: discard workout without browser confirm
   async function discardActiveWorkout() {
-    const abandonRes = await fetch(`${API_BASE_URL}/workout/abandon`, {
+    const res = await fetch(`${API_BASE_URL}/workout/abandon`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
     });
-
-    const abandonData = await abandonRes.json().catch(() => ({}));
-    if (!abandonRes.ok) {
-      throw new Error(abandonData.message || "Failed to discard workout");
-    }
+    if (!res.ok) throw new Error("Failed to discard workout");
   }
 
   async function onNewWorkout() {
     if (!today) return;
-
-    // ✅ If there is active workout today -> show modal instead of window.confirm
     if (hasActiveToday) {
       confirmNewWorkout.show({
         title: "Workout in progress",
-        description: `You already have a workout in progress today (${workoutLabel(
-          activeWorkout.planDay
-        )}). Starting a new workout will discard it.`,
+        description: `You already have a workout in progress today (${workoutLabel(activeWorkout.planDay)}). Starting a new workout will discard it.`,
       });
       return;
     }
+    startWorkout();
+  }
 
-    // ✅ no active workout -> start normally
+  async function startWorkout() {
     try {
       setError("");
       setBusy(true);
-
       const res = await fetch(`${API_BASE_URL}/workout/start`, {
         method: "POST",
         headers: {
@@ -219,16 +188,12 @@ export default function Home() {
         },
         body: JSON.stringify({ dayKey: selectedWorkout }),
       });
-
       const data = await res.json().catch(() => ({}));
-
       if (res.status === 409 && data.workout?.id) {
         nav(`/workout/${data.workout.id}`);
         return;
       }
-
       if (!res.ok) throw new Error(data.message || "Failed to start workout");
-
       await loadHome();
       nav(`/workout/${data.workout.id}`);
     } catch (e) {
@@ -242,7 +207,6 @@ export default function Home() {
 
   return (
     <div className="relative">
-      {/* Logout OUTSIDE the card - top right of page */}
       <div className="absolute right-4 top-4 z-10">
         <button
           type="button"
@@ -263,38 +227,24 @@ export default function Home() {
             <div className="text-center text-slate-300 text-sm">No data</div>
           ) : (
             <>
-              {/* Welcome row */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="h-9 w-9 rounded-full border border-white/15 bg-white/10 flex items-center justify-center text-white">
-                    👤
-                  </div>
-                  <div>
-                    <div className="text-sm text-slate-300">
-                      Welcome back,{" "}
-                      <span className="text-white font-medium">
-                        {authData?.user?.name || "Athlete"}
-                      </span>
-                    </div>
-                  </div>
+              <div className="flex items-center gap-3">
+                <div className="h-9 w-9 rounded-full border border-white/15 bg-white/10 flex items-center justify-center text-white">👤</div>
+                <div className="text-sm text-slate-300">
+                  Welcome back, <span className="text-white font-medium">{authData?.user?.name || "Athlete"}</span>
                 </div>
               </div>
 
-              {hasActiveForSelected ? (
+              {hasActiveForSelected && (
                 <ProgressCard
                   workoutLabel={workoutLabel(activeWorkout.planDay)}
                   progressPct={progress?.pct ?? 0}
-                  progressText={
-                    progress
-                      ? `${progress.done}/${progress.total} exercises done`
-                      : "In progress"
-                  }
+                  progressText={progress ? `${progress.done}/${progress.total} exercises done` : "In progress"}
                   totalTimeText={totalMins === null ? "—" : String(totalMins)}
                   totalTimeUnit={"mins"}
                   currentExerciseName={currentExerciseName}
                   onContinue={onContinue}
                 />
-              ) : null}
+              )}
 
               <TodayCard
                 recommended={workoutLabel(today.recommendedDayKey)}
@@ -310,20 +260,13 @@ export default function Home() {
               <BottomNav
                 active="home"
                 onNavigate={(to) => {
-                  if (to === "home") return;
-
-                  // ✅ REPLACE alert with modal
-                  infoModal.show({
-                    title: "Coming soon",
-                    description: `${to} page coming soon`,
-                  });
+                  if (to !== "home") nav(`/${to}`);
                 }}
               />
             </>
           )}
         </div>
 
-        {/* ✅ NEW: Confirm modal for "discard & start" */}
         <Modal
           open={confirmNewWorkout.open}
           title={confirmNewWorkout.payload?.title}
@@ -332,66 +275,19 @@ export default function Home() {
           variant="center"
         >
           <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={confirmNewWorkout.close}
-              className="flex-1 py-2.5 rounded-2xl border border-white/15 bg-white/5 text-white text-sm hover:bg-white/10 transition"
-            >
-              Cancel
-            </button>
-
-            <button
-              type="button"
+            <button type="button" onClick={confirmNewWorkout.close} className="flex-1 py-2.5 rounded-2xl border border-white/15 bg-white/5 text-white text-sm">Cancel</button>
+            <button 
+              type="button" 
               onClick={async () => {
-                try {
-                  confirmNewWorkout.close();
-                  setBusy(true);
-
-                  // discard then start the selected workout
-                  await discardActiveWorkout();
-
-                  const res = await fetch(`${API_BASE_URL}/workout/start`, {
-                    method: "POST",
-                    headers: {
-                      "Content-Type": "application/json",
-                      Authorization: `Bearer ${token}`,
-                    },
-                    body: JSON.stringify({ dayKey: selectedWorkout }),
-                  });
-
-                  const data = await res.json().catch(() => ({}));
-                  if (!res.ok) throw new Error(data.message || "Failed to start workout");
-
-                  await loadHome();
-                  nav(`/workout/${data.workout.id}`);
-                } catch (e) {
-                  setError(e.message);
-                } finally {
-                  setBusy(false);
-                }
-              }}
-              className="flex-1 py-2.5 rounded-2xl bg-red-500 text-white text-sm font-semibold hover:bg-red-400 transition"
+                confirmNewWorkout.close();
+                await discardActiveWorkout();
+                startWorkout();
+              }} 
+              className="flex-1 py-2.5 rounded-2xl bg-red-500 text-white text-sm font-semibold"
             >
               Discard & start
             </button>
           </div>
-        </Modal>
-
-        {/* ✅ NEW: Info modal for “Coming soon” */}
-        <Modal
-          open={infoModal.open}
-          title={infoModal.payload?.title}
-          description={infoModal.payload?.description}
-          onClose={infoModal.close}
-          variant="sheet"
-        >
-          <button
-            type="button"
-            onClick={infoModal.close}
-            className="w-full py-2.5 rounded-2xl bg-white/10 border border-white/15 text-white text-sm hover:bg-white/15 transition"
-          >
-            OK
-          </button>
         </Modal>
       </AuthCard>
     </div>

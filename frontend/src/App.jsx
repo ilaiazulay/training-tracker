@@ -6,6 +6,8 @@ import Onboarding from "./pages/Onboarding";
 import PlanSetup from "./pages/PlanSetup";
 import PlanBuilder from "./pages/PlanBuilder";
 import Workout from "./pages/Workout";
+import Stats from "./pages/Stats";
+import Settings from "./pages/Settings";
 
 
 function App() {
@@ -19,6 +21,8 @@ function App() {
         <Route path="/plan-builder" element={<PlanBuilder />} />
         <Route path="/home" element={<Home />} />
         <Route path="/workout/:id" element={<Workout />} />
+        <Route path="/stats" element={<Stats />} />
+        <Route path="/settings" element={<Settings />} />
       </Routes>
     </Router>
   );

@@ -10,6 +10,8 @@ const exerciseRoutes = require("./routes/exercises");
 const workoutRoutes = require("./routes/workoutRoutes");
 const workoutSessionRoutes = require("./routes/workoutSessionRoutes");
 const setRoutes = require("./routes/setRoutes");
+const statsRoutes = require("./routes/statsRoutes");
+
 
 dotenv.config();
 
@@ -34,6 +36,8 @@ app.use("/exercises", exerciseRoutes);
 app.use("/workout", workoutRoutes);
 
 app.use("/workouts", workoutSessionRoutes);
+
+app.use("/stats", statsRoutes);
 
 app.use("/", setRoutes);
 
