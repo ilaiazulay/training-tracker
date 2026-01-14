@@ -1,3 +1,4 @@
+// src/controllers/authController.js
 const bcrypt = require("bcrypt");
 const prisma = require("../prisma");
 const {
@@ -6,23 +7,33 @@ const {
   verifyRefreshToken,
 } = require("../utils/token");
 const { OAuth2Client } = require("google-auth-library");
+
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
+function toAuthUser(user) {
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    planType: user.planType,
+    hasCompletedOnboarding: user.hasCompletedOnboarding,
+    hasConfiguredPlan: user.hasConfiguredPlan, // ✅ IMPORTANT
+    gender: user.gender,
+    age: user.age,
+    heightCm: user.heightCm,
+  };
+}
 
 // POST /auth/signup
 async function signup(req, res) {
   try {
     const { email, password, name, planType } = req.body;
 
-    console.log("SIGNUP body:", req.body);
-
     if (!email || !password || !name || !planType) {
       return res.status(400).json({ message: "Missing fields" });
     }
 
-    const existing = await prisma.user.findUnique({
-      where: { email },
-    });
-
+    const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
       return res.status(409).json({ message: "Email already in use" });
     }
@@ -34,7 +45,7 @@ async function signup(req, res) {
         email,
         passwordHash,
         name,
-        planType, // must be one of: AB, ABC, ABCD, FULL_BODY
+        planType, // AB / ABC / ABCD / FULL_BODY
       },
     });
 
@@ -42,21 +53,9 @@ async function signup(req, res) {
     const refreshToken = generateRefreshToken(user);
 
     return res.status(201).json({
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        planType: user.planType,
-        hasCompletedOnboarding: user.hasCompletedOnboarding, // 👈 add this
-        gender: user.gender,
-        age: user.age,
-        heightCm: user.heightCm,
-      },
-      tokens: {
-        accessToken,
-        refreshToken,
-      },
-    });    
+      user: toAuthUser(user),
+      tokens: { accessToken, refreshToken },
+    });
   } catch (err) {
     console.error("Signup error:", err);
     return res.status(500).json({ message: "Server error" });
@@ -72,9 +71,7 @@ async function login(req, res) {
       return res.status(400).json({ message: "Missing email or password" });
     }
 
-    const user = await prisma.user.findUnique({
-      where: { email },
-    });
+    const user = await prisma.user.findUnique({ where: { email } });
 
     if (!user || !user.passwordHash) {
       return res.status(401).json({ message: "Invalid credentials" });
@@ -88,22 +85,10 @@ async function login(req, res) {
     const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user);
 
-    return res.status(201).json({
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        planType: user.planType,
-        hasCompletedOnboarding: user.hasCompletedOnboarding, // 👈 add this
-        gender: user.gender,
-        age: user.age,
-        heightCm: user.heightCm,
-      },
-      tokens: {
-        accessToken,
-        refreshToken,
-      },
-    });    
+    return res.status(200).json({
+      user: toAuthUser(user),
+      tokens: { accessToken, refreshToken },
+    });
   } catch (err) {
     console.error("Login error:", err);
     return res.status(500).json({ message: "Server error" });
@@ -121,7 +106,7 @@ async function refresh(req, res) {
     let payload;
     try {
       payload = verifyRefreshToken(refreshToken);
-    } catch (err) {
+    } catch {
       return res.status(401).json({ message: "Invalid refresh token" });
     }
 
@@ -136,6 +121,7 @@ async function refresh(req, res) {
     const newAccessToken = generateAccessToken(user);
     const newRefreshToken = generateRefreshToken(user);
 
+    // (Optional) You can also return user here, but not required
     return res.json({
       accessToken: newAccessToken,
       refreshToken: newRefreshToken,
@@ -149,14 +135,12 @@ async function refresh(req, res) {
 // POST /auth/google
 async function loginWithGoogle(req, res) {
   try {
-    console.log("LOGIN:", req.body);
     const { idToken, planType, nameFallback } = req.body;
 
     if (!idToken) {
       return res.status(400).json({ message: "Missing idToken" });
     }
 
-    // Verify token with Google
     const ticket = await googleClient.verifyIdToken({
       idToken,
       audience: process.env.GOOGLE_CLIENT_ID,
@@ -167,21 +151,12 @@ async function loginWithGoogle(req, res) {
     const email = payload.email;
     const nameFromGoogle = payload.name || email.split("@")[0];
 
-    // Find existing user by googleId OR email
     let user = await prisma.user.findFirst({
-      where: {
-        OR: [
-          { googleId },
-          { email },
-        ],
-      },
+      where: { OR: [{ googleId }, { email }] },
     });
 
-    // If user doesn't exist, create one
     if (!user) {
-      // Choose a planType: if user chose in UI when signing up, use it, else default
       const plan = planType || "AB";
-
       user = await prisma.user.create({
         data: {
           email,
@@ -190,35 +165,20 @@ async function loginWithGoogle(req, res) {
           planType: plan,
         },
       });
-    } else {
-      // If user exists but has no googleId (created by email signup), attach googleId
-      if (!user.googleId) {
-        user = await prisma.user.update({
-          where: { id: user.id },
-          data: { googleId },
-        });
-      }
+    } else if (!user.googleId) {
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: { googleId },
+      });
     }
 
     const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user);
 
-    return res.status(201).json({
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        planType: user.planType,
-        hasCompletedOnboarding: user.hasCompletedOnboarding,
-        gender: user.gender,
-        age: user.age,
-        heightCm: user.heightCm,
-      },
-      tokens: {
-        accessToken,
-        refreshToken,
-      },
-    });    
+    return res.status(200).json({
+      user: toAuthUser(user),
+      tokens: { accessToken, refreshToken },
+    });
   } catch (err) {
     console.error("Google auth error:", err);
     return res.status(500).json({ message: "Google authentication failed" });
