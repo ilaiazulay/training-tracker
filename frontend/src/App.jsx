@@ -8,7 +8,7 @@ import PlanBuilder from "./pages/PlanBuilder";
 import Workout from "./pages/Workout";
 import Stats from "./pages/Stats";
 import Settings from "./pages/Settings";
-import RequirePlan from "./components/RequiredPlan";
+import RequireReadyUser from "./components/RequireReadyUser";
 
 
 function App() {
@@ -20,39 +20,14 @@ function App() {
         <Route path="/onboarding" element={<Onboarding />} />
         <Route path="/plan-setup" element={<PlanSetup />} />
         <Route path="/plan-builder" element={<PlanBuilder />} />
-        <Route
-          path="/home"
-          element={
-            <RequirePlan>
-              <Home />
-            </RequirePlan>
-          }
-        />
-        <Route
-          path="/workout/:id"
-          element={
-            <RequirePlan>
-              <Workout />
-            </RequirePlan>
-          }
-        />
-        <Route
-          path="/stats"
-          element={
-            <RequirePlan>
-              <Stats />
-            </RequirePlan>
-          }
-        />
-        <Route
-          path="/settings"
-          element={
-            <RequirePlan>
-              <Settings />
-            </RequirePlan>
-          }
-        />
-        </Routes>
+        
+        <Route element={<RequireReadyUser />}>
+          <Route path="/home" element={<Home />} />
+          <Route path="/workout/:id" element={<Workout />} />
+          <Route path="/stats" element={<Stats />} />
+          <Route path="/settings" element={<Settings />} />
+        </Route>
+      </Routes>
     </Router>
   );
 }
