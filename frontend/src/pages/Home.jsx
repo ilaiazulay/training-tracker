@@ -43,7 +43,6 @@ function minutesSince(isoOrDate) {
 export default function Home() {
   const nav = useNavigate();
   
-  // ✅ Initialize auth state immediately to prevent flicker
   const [authData] = useState(() => getAuthData());
   const token = authData?.tokens?.accessToken;
 
@@ -63,7 +62,6 @@ export default function Home() {
     return () => clearInterval(t);
   }, []);
 
-  // ✅ Stable Auth Check
   useEffect(() => {
     if (!authData || !token) {
       nav("/");
@@ -206,8 +204,9 @@ export default function Home() {
   if (!authData) return null;
 
   return (
-    <div className="relative">
-      <div className="absolute right-4 top-4 z-10">
+    <AuthCard 
+      title="Home"
+      topRight={
         <button
           type="button"
           onClick={logout}
@@ -215,81 +214,80 @@ export default function Home() {
         >
           Logout
         </button>
+      }
+      bottom={
+        <BottomNav
+          active="home"
+          onNavigate={(to) => {
+            if (to !== "home") nav(`/${to}`);
+          }}
+        />
+      }
+    >
+      <div className="space-y-4">
+        <ErrorAlert message={error} />
+
+        {loading ? (
+          <div className="text-center text-slate-300 text-sm mt-10">Loading...</div>
+        ) : !today ? (
+          <div className="text-center text-slate-300 text-sm mt-10">No data</div>
+        ) : (
+          <>
+            <div className="flex items-center gap-3">
+              <div className="h-9 w-9 rounded-full border border-white/15 bg-white/10 flex items-center justify-center text-white">👤</div>
+              <div className="text-sm text-slate-300">
+                Welcome back, <span className="text-white font-medium">{authData?.user?.name || "Athlete"}</span>
+              </div>
+            </div>
+
+            {hasActiveForSelected && (
+              <ProgressCard
+                workoutLabel={workoutLabel(activeWorkout.planDay)}
+                progressPct={progress?.pct ?? 0}
+                progressText={progress ? `${progress.done}/${progress.total} exercises done` : "In progress"}
+                totalTimeText={totalMins === null ? "—" : String(totalMins)}
+                totalTimeUnit={"mins"}
+                currentExerciseName={currentExerciseName}
+                onContinue={onContinue}
+              />
+            )}
+
+            <TodayCard
+              recommended={workoutLabel(today.recommendedDayKey)}
+              dayKeys={today.dayKeys || []}
+              selected={selectedWorkout}
+              onChangeSelected={setSelectedWorkout}
+              hasActiveForSelected={hasActiveForSelected}
+              busy={busy}
+              onContinue={onContinue}
+              onNewWorkout={onNewWorkout}
+            />
+          </>
+        )}
       </div>
 
-      <AuthCard title="Home">
-        <div className="space-y-4">
-          <ErrorAlert message={error} />
-
-          {loading ? (
-            <div className="text-center text-slate-300 text-sm">Loading...</div>
-          ) : !today ? (
-            <div className="text-center text-slate-300 text-sm">No data</div>
-          ) : (
-            <>
-              <div className="flex items-center gap-3">
-                <div className="h-9 w-9 rounded-full border border-white/15 bg-white/10 flex items-center justify-center text-white">👤</div>
-                <div className="text-sm text-slate-300">
-                  Welcome back, <span className="text-white font-medium">{authData?.user?.name || "Athlete"}</span>
-                </div>
-              </div>
-
-              {hasActiveForSelected && (
-                <ProgressCard
-                  workoutLabel={workoutLabel(activeWorkout.planDay)}
-                  progressPct={progress?.pct ?? 0}
-                  progressText={progress ? `${progress.done}/${progress.total} exercises done` : "In progress"}
-                  totalTimeText={totalMins === null ? "—" : String(totalMins)}
-                  totalTimeUnit={"mins"}
-                  currentExerciseName={currentExerciseName}
-                  onContinue={onContinue}
-                />
-              )}
-
-              <TodayCard
-                recommended={workoutLabel(today.recommendedDayKey)}
-                dayKeys={today.dayKeys || []}
-                selected={selectedWorkout}
-                onChangeSelected={setSelectedWorkout}
-                hasActiveForSelected={hasActiveForSelected}
-                busy={busy}
-                onContinue={onContinue}
-                onNewWorkout={onNewWorkout}
-              />
-
-              <BottomNav
-                active="home"
-                onNavigate={(to) => {
-                  if (to !== "home") nav(`/${to}`);
-                }}
-              />
-            </>
-          )}
+      <Modal
+        open={confirmNewWorkout.open}
+        title={confirmNewWorkout.payload?.title}
+        description={confirmNewWorkout.payload?.description}
+        onClose={confirmNewWorkout.close}
+        variant="center"
+      >
+        <div className="flex gap-2">
+          <button type="button" onClick={confirmNewWorkout.close} className="flex-1 py-2.5 rounded-2xl border border-white/15 bg-white/5 text-white text-sm hover:bg-white/10 transition">Cancel</button>
+          <button 
+            type="button" 
+            onClick={async () => {
+              confirmNewWorkout.close();
+              await discardActiveWorkout();
+              startWorkout();
+            }} 
+            className="flex-1 py-2.5 rounded-2xl bg-red-500 text-white text-sm font-semibold hover:bg-red-400 transition"
+          >
+            Discard & start
+          </button>
         </div>
-
-        <Modal
-          open={confirmNewWorkout.open}
-          title={confirmNewWorkout.payload?.title}
-          description={confirmNewWorkout.payload?.description}
-          onClose={confirmNewWorkout.close}
-          variant="center"
-        >
-          <div className="flex gap-2">
-            <button type="button" onClick={confirmNewWorkout.close} className="flex-1 py-2.5 rounded-2xl border border-white/15 bg-white/5 text-white text-sm">Cancel</button>
-            <button 
-              type="button" 
-              onClick={async () => {
-                confirmNewWorkout.close();
-                await discardActiveWorkout();
-                startWorkout();
-              }} 
-              className="flex-1 py-2.5 rounded-2xl bg-red-500 text-white text-sm font-semibold"
-            >
-              Discard & start
-            </button>
-          </div>
-        </Modal>
-      </AuthCard>
-    </div>
+      </Modal>
+    </AuthCard>
   );
 }
