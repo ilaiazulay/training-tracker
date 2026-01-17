@@ -1,5 +1,6 @@
-import { useEffect } from "react";
+import React, { useEffect } from "react";
 import { createPortal } from "react-dom";
+import { AnimatePresence, motion } from "framer-motion";
 
 export default function Modal({
   open,
@@ -7,62 +8,77 @@ export default function Modal({
   description,
   onClose,
   children,
+  variant = "center", // "center" | "sheet"
 }) {
+  if (typeof document === "undefined") return null;
+
+  // Prevent background scroll when modal is open
   useEffect(() => {
     if (!open) return;
-
-    function onKeyDown(e) {
-      if (e.key === "Escape") onClose?.();
-    }
-
-    document.addEventListener("keydown", onKeyDown);
-
-    // Lock background scroll
-    const prevOverflow = document.body.style.overflow;
+    const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-
     return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      document.body.style.overflow = prevOverflow;
+      document.body.style.overflow = prev;
     };
-  }, [open, onClose]);
+  }, [open]);
 
-  if (!open) return null;
+  return createPortal(
+    <AnimatePresence>
+      {open ? (
+        <motion.div
+          className="fixed inset-0 z-[999] flex items-center justify-center p-4"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1, transition: { duration: 0.16 } }}
+          exit={{ opacity: 0, transition: { duration: 0.14 } }}
+        >
+          {/* Backdrop */}
+          <motion.button
+            type="button"
+            aria-label="Close modal"
+            className="absolute inset-0 bg-black/60"
+            onClick={onClose}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1, transition: { duration: 0.16 } }}
+            exit={{ opacity: 0, transition: { duration: 0.14 } }}
+          />
 
-  const node = (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
-      {/* Backdrop */}
-      <button
-        type="button"
-        onClick={onClose}
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-        aria-label="Close modal"
-      />
-
-      {/* Centered Panel */}
-      <div className="relative w-[92vw] max-w-md">
-        <div className="relative rounded-3xl border border-white/15 bg-slate-950/70 backdrop-blur-xl shadow-2xl overflow-hidden">
-          {/* subtle glass glow */}
-          <div className="absolute -inset-px rounded-3xl bg-gradient-to-tr from-white/10 via-transparent to-white/20 opacity-40 pointer-events-none" />
-
-          <div className="relative p-5">
+          {/* Dialog */}
+          <motion.div
+            className={[
+              "relative w-full max-w-md rounded-3xl border border-white/15 bg-slate-950/80 backdrop-blur-xl p-5",
+              variant === "sheet" ? "mt-auto" : "",
+            ].join(" ")}
+            initial={{
+              opacity: 0,
+              y: variant === "sheet" ? 28 : 18,
+              scale: variant === "sheet" ? 1 : 0.98,
+            }}
+            animate={{
+              opacity: 1,
+              y: 0,
+              scale: 1,
+              transition: { duration: 0.18, ease: "easeOut" },
+            }}
+            exit={{
+              opacity: 0,
+              y: variant === "sheet" ? 28 : 18,
+              scale: variant === "sheet" ? 1 : 0.98,
+              transition: { duration: 0.14, ease: "easeIn" },
+            }}
+          >
             {title ? (
-              <div className="text-white font-semibold text-base">{title}</div>
+              <div className="text-white font-semibold text-lg">{title}</div>
             ) : null}
 
             {description ? (
-              <div className="text-sm text-slate-300 mt-2 leading-relaxed">
-                {description}
-              </div>
+              <div className="text-slate-400 text-xs mt-1">{description}</div>
             ) : null}
 
             <div className="mt-4">{children}</div>
-          </div>
-        </div>
-      </div>
-    </div>
+          </motion.div>
+        </motion.div>
+      ) : null}
+    </AnimatePresence>,
+    document.body
   );
-
-  // ✅ Portal makes it truly screen-centered regardless of parent transforms
-  return createPortal(node, document.body);
 }

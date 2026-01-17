@@ -1,6 +1,6 @@
-// src/pages/Workout.jsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { AnimatePresence, motion } from "framer-motion";
 import AuthCard from "../components/AuthCard";
 import ErrorAlert from "../components/ErrorAlert";
 import Modal from "../components/Modal";
@@ -20,9 +20,7 @@ function sortBySetIndex(a, b) {
 function formatStat(stat) {
   if (!stat) return null;
 
-  if (stat.kind === "NORMAL") {
-    return `${stat.weight}×${stat.reps}`;
-  }
+  if (stat.kind === "NORMAL") return `${stat.weight}×${stat.reps}`;
 
   if (stat.kind === "DROPSET") {
     const main = stat.main ? `${stat.main.weight}×${stat.main.reps}` : "";
@@ -35,7 +33,6 @@ function formatStat(stat) {
 
 function prefillFromLastBest(last) {
   if (!last) return { weight: 0, reps: 0 };
-
   if (last.kind === "NORMAL") return { weight: last.weight ?? 0, reps: last.reps ?? 0 };
 
   if (last.kind === "DROPSET") {
@@ -62,6 +59,9 @@ export default function Workout() {
   const [dropMain, setDropMain] = useState({ weight: "", reps: "" });
   const [dropParts, setDropParts] = useState([{ weight: "", reps: "" }]);
   const [savingDrop, setSavingDrop] = useState(false);
+
+  // For add animation highlight
+  const lastAddedSetIdRef = useRef(null);
 
   function logout() {
     clearAuthData();
@@ -102,7 +102,8 @@ export default function Workout() {
     return () => {
       cancelled = true;
     };
-  }, [id, accessToken, nav]); // important: accessToken only
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, accessToken, nav]);
 
   async function refreshWorkout() {
     try {
@@ -174,6 +175,9 @@ export default function Workout() {
 
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || "Failed to add set");
+
+      // Save last added set id for highlight animation
+      if (data?.set?.id) lastAddedSetIdRef.current = data.set.id;
 
       await refreshWorkout();
     } catch (e) {
@@ -355,7 +359,7 @@ export default function Workout() {
 
   return (
     <>
-      {/* Logout top-right (outside card) */}
+      {/* Logout top-right */}
       <button
         type="button"
         onClick={logout}
@@ -383,8 +387,7 @@ export default function Workout() {
                   </span>
                 </div>
                 <div className="text-xs text-slate-400">
-                  Exercises:{" "}
-                  <span className="text-white font-medium">{workout.exercises.length}</span>
+                  Exercises: <span className="text-white font-medium">{workout.exercises.length}</span>
                 </div>
               </div>
 
@@ -395,10 +398,7 @@ export default function Workout() {
                 const prText = formatStat(stats?.pr);
 
                 return (
-                  <div
-                    key={we.id}
-                    className="rounded-2xl border border-white/15 bg-white/5 p-4 space-y-3"
-                  >
+                  <div key={we.id} className="rounded-2xl border border-white/15 bg-white/5 p-4 space-y-3">
                     <div className="flex items-start gap-4">
                       {/* Image */}
                       <div className="w-16 h-16 rounded-xl overflow-hidden bg-black/20 flex-shrink-0 border border-white/10">
@@ -419,15 +419,12 @@ export default function Workout() {
                       {/* Name + stats */}
                       <div className="flex-1">
                         <div className="text-white font-semibold">{we.exercise.name}</div>
-                        <div className="text-[11px] text-slate-400">
-                          {prettyMuscle(we.exercise.muscleGroup)}
-                        </div>
+                        <div className="text-[11px] text-slate-400">{prettyMuscle(we.exercise.muscleGroup)}</div>
 
                         <div className="flex flex-wrap gap-2 mt-2">
                           {lastText ? (
                             <span className="px-2 py-1 rounded-full text-[11px] border border-white/10 bg-white/5 text-slate-200">
-                              Last best:{" "}
-                              <span className="font-semibold text-white">{lastText}</span>
+                              Last best: <span className="font-semibold text-white">{lastText}</span>
                             </span>
                           ) : (
                             <span className="px-2 py-1 rounded-full text-[11px] border border-white/10 bg-white/5 text-slate-400">
@@ -437,8 +434,7 @@ export default function Workout() {
 
                           {prText ? (
                             <span className="px-2 py-1 rounded-full text-[11px] border border-emerald-300/20 bg-emerald-400/10 text-emerald-200">
-                              PR:{" "}
-                              <span className="font-semibold text-emerald-100">{prText}</span>
+                              PR: <span className="font-semibold text-emerald-100">{prText}</span>
                             </span>
                           ) : null}
                         </div>
@@ -449,7 +445,7 @@ export default function Workout() {
                         <button
                           type="button"
                           onClick={() => addNormalSet(we.id, we.exerciseId)}
-                          className="px-3 py-1.5 rounded-xl text-sm border border-white/15 bg-white/5 text-white hover:bg-white/10 transition"
+                          className="px-3 py-1.5 rounded-xl text-sm border border-white/15 bg-white/5 text-white hover:bg-white/10 active:scale-[0.98] transition"
                         >
                           + Set
                         </button>
@@ -457,67 +453,86 @@ export default function Workout() {
                         <button
                           type="button"
                           onClick={() => openDropSetModal(we.id, we.exerciseId)}
-                          className="px-3 py-1.5 rounded-xl text-sm border border-emerald-300/20 bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/15 transition"
+                          className="px-3 py-1.5 rounded-xl text-sm border border-emerald-300/20 bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/15 active:scale-[0.98] transition"
                         >
                           + Drop
                         </button>
                       </div>
                     </div>
 
-                    {/* NORMAL Sets */}
-                    {we.normalSets.length > 0 ? (
-                      <div className="space-y-2">
-                        {we.normalSets.map((s) => (
-                          <div
-                            key={s.id}
-                            className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2"
-                          >
-                            <div className="text-xs text-slate-300 w-10">#{s.setIndex + 1}</div>
+                    {/* NORMAL Sets (Animated) */}
+                    <div className="space-y-2">
+                      <AnimatePresence initial={false} mode="popLayout">
+                        {we.normalSets.map((s) => {
+                          const isJustAdded =
+                            lastAddedSetIdRef.current && s.id === lastAddedSetIdRef.current;
 
-                            <input
-                              className="w-20 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40"
-                              type="number"
-                              step="0.5"
-                              value={s.weight}
-                              onChange={(e) =>
-                                updateNormalSet(we.id, s.setIndex, e.target.value, s.reps)
-                              }
-                            />
-                            <div className="text-xs text-slate-400">kg</div>
-
-                            <input
-                              className="w-16 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40"
-                              type="number"
-                              value={s.reps}
-                              onChange={(e) =>
-                                updateNormalSet(we.id, s.setIndex, s.weight, e.target.value)
-                              }
-                            />
-                            <div className="text-xs text-slate-400">reps</div>
-
-                            <button
-                              type="button"
-                              onClick={() => removeSet(s.id)}
-                              className="ml-auto text-xs text-red-300 hover:text-red-200 transition"
-                              title="Remove set"
+                          return (
+                            <motion.div
+                              key={s.id}
+                              layout
+                              initial={{ opacity: 0, y: 10, scale: 0.98 }}
+                              animate={{
+                                opacity: 1,
+                                y: 0,
+                                scale: 1,
+                                boxShadow: isJustAdded
+                                  ? "0 0 0 1px rgba(52,211,153,0.35), 0 0 22px rgba(52,211,153,0.18)"
+                                  : "0 0 0 0 rgba(0,0,0,0)",
+                              }}
+                              exit={{ opacity: 0, y: -8, scale: 0.96 }}
+                              transition={{ duration: 0.18, ease: "easeOut" }}
+                              onAnimationComplete={() => {
+                                if (isJustAdded) lastAddedSetIdRef.current = null;
+                              }}
+                              className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2"
                             >
-                              Remove
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="text-xs text-slate-400">No sets logged yet</div>
-                    )}
+                              <div className="text-xs text-slate-300 w-10">#{s.setIndex + 1}</div>
+
+                              <input
+                                className="w-20 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40"
+                                type="number"
+                                step="0.5"
+                                value={s.weight}
+                                onChange={(e) =>
+                                  updateNormalSet(we.id, s.setIndex, e.target.value, s.reps)
+                                }
+                              />
+                              <div className="text-xs text-slate-400">kg</div>
+
+                              <input
+                                className="w-16 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40"
+                                type="number"
+                                value={s.reps}
+                                onChange={(e) =>
+                                  updateNormalSet(we.id, s.setIndex, s.weight, e.target.value)
+                                }
+                              />
+                              <div className="text-xs text-slate-400">reps</div>
+
+                              <button
+                                type="button"
+                                onClick={() => removeSet(s.id)}
+                                className="ml-auto text-xs text-red-300 hover:text-red-200 transition"
+                                title="Remove set"
+                              >
+                                Remove
+                              </button>
+                            </motion.div>
+                          );
+                        })}
+                      </AnimatePresence>
+
+                      {we.normalSets.length === 0 ? (
+                        <div className="text-xs text-slate-400">No sets logged yet</div>
+                      ) : null}
+                    </div>
 
                     {/* DROP SET GROUPS */}
                     {we.dropGroups.length > 0 ? (
                       <div className="space-y-3 pt-2">
                         {we.dropGroups.map((g) => (
-                          <div
-                            key={g.groupId}
-                            className="rounded-2xl border border-emerald-300/20 bg-emerald-400/10 p-3"
-                          >
+                          <div key={g.groupId} className="rounded-2xl border border-emerald-300/20 bg-emerald-400/10 p-3">
                             <div className="flex items-center justify-between mb-2">
                               <div className="text-sm font-semibold text-emerald-100">Drop set</div>
                               <button
@@ -560,9 +575,7 @@ export default function Workout() {
                                   key={p.id}
                                   className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2"
                                 >
-                                  <div className="text-[11px] text-emerald-200 w-12">
-                                    Drop {idx + 1}
-                                  </div>
+                                  <div className="text-[11px] text-emerald-200 w-12">Drop {idx + 1}</div>
                                   <input
                                     className="w-20 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40"
                                     type="number"
@@ -575,9 +588,7 @@ export default function Workout() {
                                     className="w-16 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40"
                                     type="number"
                                     value={p.reps}
-                                    onChange={(e) =>
-                                      updateAnySetById(p.id, p.weight, e.target.value)
-                                    }
+                                    onChange={(e) => updateAnySetById(p.id, p.weight, e.target.value)}
                                   />
                                   <div className="text-xs text-slate-200">reps</div>
                                 </div>
@@ -603,12 +614,13 @@ export default function Workout() {
           )}
         </div>
 
-        {/* ✅ Drop set modal (Portal / always centered) */}
+        {/* ✅ Drop set modal (OPEN/CLOSE animation handled inside Modal) */}
         <Modal
           open={!!dropOpenForWE}
           title="Add drop set"
           description="Main set + optional drops"
           onClose={() => setDropOpenForWE(null)}
+          variant="center"
         >
           <div className="space-y-3">
             <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
@@ -645,42 +657,52 @@ export default function Workout() {
               </div>
 
               <div className="space-y-2">
-                {dropParts.map((p, idx) => (
-                  <div key={idx} className="flex items-center gap-2">
-                    <input
-                      className="w-24 bg-white/5 border border-white/15 rounded-xl px-2 py-2 text-sm text-white outline-none focus:border-white/40"
-                      type="number"
-                      step="0.5"
-                      placeholder="kg"
-                      value={p.weight}
-                      onChange={(e) =>
-                        setDropParts((arr) =>
-                          arr.map((x, i) => (i === idx ? { ...x, weight: e.target.value } : x))
-                        )
-                      }
-                    />
-                    <input
-                      className="w-24 bg-white/5 border border-white/15 rounded-xl px-2 py-2 text-sm text-white outline-none focus:border-white/40"
-                      type="number"
-                      placeholder="reps"
-                      value={p.reps}
-                      onChange={(e) =>
-                        setDropParts((arr) =>
-                          arr.map((x, i) => (i === idx ? { ...x, reps: e.target.value } : x))
-                        )
-                      }
-                    />
-
-                    <button
-                      type="button"
-                      className="ml-auto text-xs text-red-300 hover:text-red-200 transition"
-                      onClick={() => setDropParts((arr) => arr.filter((_, i) => i !== idx))}
-                      title="Remove drop"
+                <AnimatePresence initial={false} mode="popLayout">
+                  {dropParts.map((p, idx) => (
+                    <motion.div
+                      key={idx}
+                      layout
+                      initial={{ opacity: 0, y: 8, scale: 0.98 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -8, scale: 0.96 }}
+                      transition={{ duration: 0.16, ease: "easeOut" }}
+                      className="flex items-center gap-2"
                     >
-                      Remove
-                    </button>
-                  </div>
-                ))}
+                      <input
+                        className="w-24 bg-white/5 border border-white/15 rounded-xl px-2 py-2 text-sm text-white outline-none focus:border-white/40"
+                        type="number"
+                        step="0.5"
+                        placeholder="kg"
+                        value={p.weight}
+                        onChange={(e) =>
+                          setDropParts((arr) =>
+                            arr.map((x, i) => (i === idx ? { ...x, weight: e.target.value } : x))
+                          )
+                        }
+                      />
+                      <input
+                        className="w-24 bg-white/5 border border-white/15 rounded-xl px-2 py-2 text-sm text-white outline-none focus:border-white/40"
+                        type="number"
+                        placeholder="reps"
+                        value={p.reps}
+                        onChange={(e) =>
+                          setDropParts((arr) =>
+                            arr.map((x, i) => (i === idx ? { ...x, reps: e.target.value } : x))
+                          )
+                        }
+                      />
+
+                      <button
+                        type="button"
+                        className="ml-auto text-xs text-red-300 hover:text-red-200 transition"
+                        onClick={() => setDropParts((arr) => arr.filter((_, i) => i !== idx))}
+                        title="Remove drop"
+                      >
+                        Remove
+                      </button>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
               </div>
             </div>
 
