@@ -100,6 +100,40 @@ async function completeOnboarding(req, res) {
   }
 }
 
+async function updatePlanType(req, res) {
+  try {
+    const userId = req.user.id;
+    const { planType } = req.body;
+
+    const allowed = ["AB", "ABC", "ABCD", "FULL_BODY"];
+    if (!allowed.includes(planType)) {
+      return res.status(400).json({ message: "Invalid planType" });
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        planType,
+        hasConfiguredPlan: false, // force rebuild
+      },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        planType: true,
+        hasCompletedOnboarding: true,
+        hasConfiguredPlan: true,
+      },
+    });
+
+    return res.json({ user: updatedUser });
+  } catch (err) {
+    console.error("updatePlanType error:", err);
+    return res.status(500).json({ message: "Failed to update plan type" });
+  }
+}
+
 module.exports = {
   completeOnboarding,
+  updatePlanType
 };

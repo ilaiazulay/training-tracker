@@ -276,9 +276,85 @@ async function saveCustomPlan(req, res) {
   }
 }
 
+async function getMyPlan(req, res) {
+  try {
+    const userId = req.user.id;
+
+    const trainingDays = await prisma.userTrainingDay.findMany({
+      where: { userId },
+      orderBy: { dayKey: "asc" },
+      include: {
+        exercises: {
+          orderBy: { orderIndex: "asc" },
+          include: {
+            exercise: true, // ✅ important (to get muscleGroup)
+          },
+        },
+      },
+    });
+
+    return res.json({
+      days: trainingDays.map((d) => {
+        const exerciseIds = d.exercises.map((x) => x.exerciseId);
+
+        const muscleGroups = Array.from(
+          new Set(d.exercises.map((x) => x.exercise?.muscleGroup).filter(Boolean))
+        );
+
+        return {
+          dayKey: d.dayKey,
+          muscleGroups,          // ✅ now PlanBuilder can show exercises
+          exerciseIds,
+        };
+      }),
+    });
+  } catch (err) {
+    console.error("getMyPlan error:", err);
+    return res.status(500).json({ message: "Failed to load plan" });
+  }
+}
+
+async function getCurrentPlan(req, res) {
+  try {
+    const userId = req.user.id;
+
+    const trainingDays = await prisma.userTrainingDay.findMany({
+      where: { userId },
+      orderBy: { dayKey: "asc" },
+      include: {
+        exercises: {
+          orderBy: { orderIndex: "asc" },
+          include: {
+            exercise: true,
+          },
+        },
+      },
+    });
+
+    return res.json({
+      trainingDays: trainingDays.map((d) => ({
+        dayKey: d.dayKey,
+        label: d.label,
+        exercises: d.exercises.map((x) => ({
+          exerciseId: x.exerciseId,
+          name: x.exercise.name,
+          muscleGroup: x.exercise.muscleGroup,
+          orderIndex: x.orderIndex,
+        })),
+      })),
+    });
+  } catch (err) {
+    console.error("getCurrentPlan error:", err);
+    return res.status(500).json({ message: "Failed to load current plan" });
+  }
+}
+
+
 
 
 module.exports = {
   generateDefaultPlan,
   saveCustomPlan,
+  getMyPlan,
+  getCurrentPlan,
 };

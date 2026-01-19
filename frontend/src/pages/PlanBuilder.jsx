@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import AuthCard from "../components/AuthCard";
 import ErrorAlert from "../components/ErrorAlert";
 import { getAuthData, saveAuthData } from "../auth";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
-// MUST match your Prisma enum MuscleGroup values
 const MUSCLE_GROUPS = [
   "CHEST",
   "SHOULDERS",
@@ -26,16 +25,26 @@ function getDayKeys(planType) {
   return ["A"]; // FULL_BODY etc.
 }
 
+function makeEmptyDaysState(dayKeys) {
+  const obj = {};
+  for (const k of dayKeys) obj[k] = { muscleGroups: [], exerciseIds: [] };
+  return obj;
+}
+
 export default function PlanBuilder() {
   const nav = useNavigate();
+  const [sp] = useSearchParams();
+  const isEdit = sp.get("edit") === "1";
+
   const authData = getAuthData();
+  const token = authData?.tokens?.accessToken;
 
-  const dayKeys = useMemo(() => {
-    if (!authData) return ["A"];
-    return getDayKeys(authData.user.planType);
-  }, [authData]);
+  const dayKeys = useMemo(
+    () => getDayKeys(authData?.user?.planType),
+    [authData?.user?.planType]
+  );
 
-  const [activeDay, setActiveDay] = useState(dayKeys[0]);
+  const [activeDay, setActiveDay] = useState(() => dayKeys[0] || "A");
 
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -43,64 +52,122 @@ export default function PlanBuilder() {
   const [exercisePool, setExercisePool] = useState([]);
   const [search, setSearch] = useState("");
 
-  // Per-day builder state
-  const [daysState, setDaysState] = useState(() => {
-    const obj = {};
-    for (const k of dayKeys) obj[k] = { muscleGroups: [], exerciseIds: [] };
-    return obj;
-  });
+  const [daysState, setDaysState] = useState(() => makeEmptyDaysState(dayKeys));
 
-  // Add custom exercise form
   const [newExName, setNewExName] = useState("");
-  const [newExGroup, setNewExGroup] = useState(MUSCLE_GROUPS[0] || "CHEST");
+  const [newExGroup, setNewExGroup] = useState("CHEST");
+
+  // Redirect if not logged in
+  useEffect(() => {
+    if (!authData || !token) nav("/");
+  }, [authData, token, nav]);
+
+  // Keep activeDay valid if planType changes
+  useEffect(() => {
+    if (!dayKeys.includes(activeDay)) setActiveDay(dayKeys[0] || "A");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dayKeys.join("|")]);
+
+  // Ensure daysState keys match plan split (only update if needed)
+  useEffect(() => {
+    setDaysState((prev) => {
+      let changed = false;
+      const next = { ...prev };
+
+      for (const k of dayKeys) {
+        if (!next[k]) {
+          next[k] = { muscleGroups: [], exerciseIds: [] };
+          changed = true;
+        }
+      }
+
+      for (const k of Object.keys(next)) {
+        if (!dayKeys.includes(k)) {
+          delete next[k];
+          changed = true;
+        }
+      }
+
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dayKeys.join("|")]);
 
   // Load exercise pool
   useEffect(() => {
-    if (!authData) {
-      nav("/");
-      return;
-    }
+    if (!token) return;
+
+    let cancelled = false;
 
     (async () => {
       try {
         setError("");
         const res = await fetch(`${API_BASE_URL}/exercises`, {
-          headers: { Authorization: `Bearer ${authData.tokens.accessToken}` },
+          headers: { Authorization: `Bearer ${token}` },
         });
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.message || "Failed to load exercises");
-        }
-        const data = await res.json();
-        setExercisePool(data.exercises || []);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.message || "Failed to load exercises");
+        if (!cancelled) setExercisePool(data.exercises || []);
       } catch (e) {
-        setError(e.message);
+        if (!cancelled) setError(e.message);
       }
     })();
-  }, [authData, nav]);
 
-  // Keep activeDay + daysState aligned with planType changes
-  useEffect(() => {
-    if (!dayKeys.includes(activeDay)) setActiveDay(dayKeys[0]);
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
-    setDaysState((prev) => {
-      const next = { ...prev };
-      for (const k of dayKeys) {
-        if (!next[k]) next[k] = { muscleGroups: [], exerciseIds: [] };
+  // ✅ NEW: Load current saved plan when editing
+useEffect(() => {
+  if (!token || !isEdit) return;
+
+  let cancelled = false;
+
+  (async () => {
+    try {
+      setError("");
+
+      const res = await fetch(`${API_BASE_URL}/plan/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || "Failed to load current plan");
+
+      const incoming = makeEmptyDaysState(dayKeys);
+
+      for (const day of data.days || []) {
+        if (!incoming[day.dayKey]) continue;
+
+        incoming[day.dayKey] = {
+          muscleGroups: Array.isArray(day.muscleGroups) ? day.muscleGroups : [],
+          exerciseIds: Array.isArray(day.exerciseIds) ? day.exerciseIds : [],
+        };
       }
-      return next;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dayKeys.join("|")]);
+
+      if (!cancelled) setDaysState(incoming);
+    } catch (e) {
+      if (!cancelled) setError(e.message);
+    }
+  })();
+
+  return () => {
+    cancelled = true;
+  };
+// eslint-disable-next-line react-hooks/exhaustive-deps
+}, [token, isEdit, dayKeys.join("|")]);
+
 
   if (!authData) return null;
 
   const selectedIds = daysState[activeDay]?.exerciseIds || [];
   const selectedGroupsForDay = daysState[activeDay]?.muscleGroups || [];
 
-  // Keep newExGroup valid for the active day's selected muscle groups
+  // Keep newExGroup valid for the active day
   useEffect(() => {
-    if (selectedGroupsForDay.length > 0 && !selectedGroupsForDay.includes(newExGroup)) {
+    if (selectedGroupsForDay.length === 0) return;
+    if (!selectedGroupsForDay.includes(newExGroup)) {
       setNewExGroup(selectedGroupsForDay[0]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -108,7 +175,7 @@ export default function PlanBuilder() {
 
   const toggleMuscle = (dayKey, mg) => {
     setDaysState((prev) => {
-      const cur = prev[dayKey];
+      const cur = prev[dayKey] || { muscleGroups: [], exerciseIds: [] };
       const exists = cur.muscleGroups.includes(mg);
       const muscleGroups = exists
         ? cur.muscleGroups.filter((x) => x !== mg)
@@ -119,7 +186,7 @@ export default function PlanBuilder() {
 
   const toggleExercise = (dayKey, exId) => {
     setDaysState((prev) => {
-      const cur = prev[dayKey];
+      const cur = prev[dayKey] || { muscleGroups: [], exerciseIds: [] };
       const exists = cur.exerciseIds.includes(exId);
       const exerciseIds = exists
         ? cur.exerciseIds.filter((x) => x !== exId)
@@ -128,23 +195,22 @@ export default function PlanBuilder() {
     });
   };
 
-  // Filter pool by selected muscle groups for the active day
   const poolForActiveDay = useMemo(() => {
     if (selectedGroupsForDay.length === 0) return [];
     const allowed = new Set(selectedGroupsForDay);
     return exercisePool.filter((ex) => allowed.has(ex.muscleGroup));
   }, [exercisePool, selectedGroupsForDay]);
 
-  // Then apply search filter
   const filteredPool = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return poolForActiveDay;
     return poolForActiveDay.filter((e) => e.name.toLowerCase().includes(q));
   }, [poolForActiveDay, search]);
 
-  const suggestions = useMemo(() => {
-    return filteredPool.slice(0, 12).map((e) => e.name);
-  }, [filteredPool]);
+  const suggestions = useMemo(
+    () => filteredPool.slice(0, 12).map((e) => e.name),
+    [filteredPool]
+  );
 
   const createCustomExercise = async () => {
     try {
@@ -167,7 +233,7 @@ export default function PlanBuilder() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${authData.tokens.accessToken}`,
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ name, muscleGroup: newExGroup }),
       });
@@ -175,7 +241,6 @@ export default function PlanBuilder() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || "Failed to create exercise");
 
-      // Add to pool and auto-select
       setExercisePool((prev) => [data.exercise, ...prev]);
       setNewExName("");
       toggleExercise(activeDay, data.exercise.id);
@@ -189,7 +254,6 @@ export default function PlanBuilder() {
       setError("");
       setSaving(true);
 
-      // Require: at least 1 muscle group + 1 exercise per day
       for (const k of dayKeys) {
         if (!daysState[k] || daysState[k].muscleGroups.length === 0) {
           throw new Error(`Day ${k} must have at least 1 muscle group selected`);
@@ -211,7 +275,7 @@ export default function PlanBuilder() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${authData.tokens.accessToken}`,
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify(payload),
       });
@@ -224,7 +288,7 @@ export default function PlanBuilder() {
         user: { ...authData.user, hasConfiguredPlan: true },
       });
 
-      nav("/home");
+      nav(isEdit ? "/settings" : "/home");
     } catch (e) {
       setError(e.message);
     } finally {
@@ -232,7 +296,6 @@ export default function PlanBuilder() {
     }
   };
 
-  // Disable save until each day has ≥1 muscle group and ≥1 exercise
   const canSave = useMemo(() => {
     return dayKeys.every((k) => {
       const d = daysState[k];
@@ -241,7 +304,7 @@ export default function PlanBuilder() {
   }, [dayKeys, daysState]);
 
   return (
-    <AuthCard title="Build your plan" onBack={() => nav(-1)}>
+    <AuthCard title={isEdit ? "Edit your plan" : "Build your plan"} onBack={() => nav(-1)}>
       <div className="space-y-4">
         <ErrorAlert message={error} />
 
@@ -345,7 +408,6 @@ export default function PlanBuilder() {
               onChange={(e) => setNewExName(e.target.value)}
             />
 
-            {/* Select matches input styling */}
             <select
               className="bg-white/5 border border-white/15 rounded-xl px-2 py-2 text-sm text-white outline-none focus:border-white/40 disabled:opacity-50"
               value={newExGroup}
@@ -370,7 +432,7 @@ export default function PlanBuilder() {
           </button>
         </div>
 
-        {/* Exercise pool (filtered by selected muscle groups) */}
+        {/* Exercise pool */}
         <div className="rounded-2xl border border-white/15 bg-white/5 p-3">
           <div className="text-xs text-slate-300 mb-2">Pick exercises</div>
 
@@ -397,7 +459,7 @@ export default function PlanBuilder() {
               <div className="max-h-60 overflow-auto space-y-2 pr-1">
                 {filteredPool.length === 0 ? (
                   <div className="text-[11px] text-slate-400 px-2 py-3">
-                    No matches in selected muscle groups. Try a different search or add a custom exercise.
+                    No matches. Try a different search or add a custom exercise.
                   </div>
                 ) : (
                   filteredPool.map((ex) => {
@@ -412,7 +474,6 @@ export default function PlanBuilder() {
                             ? "bg-emerald-400/20 border-emerald-400/40 text-white"
                             : "bg-white/5 border-white/15 text-slate-100 hover:bg-white/10"
                         }`}
-                        title={picked ? "Click to remove from this day" : "Click to add to this day"}
                       >
                         <div className="text-sm">{ex.name}</div>
                         <div className="text-[11px] text-slate-300">
@@ -433,16 +494,9 @@ export default function PlanBuilder() {
           disabled={saving || !canSave}
           onClick={savePlan}
           className="w-full bg-emerald-400 text-slate-900 font-medium py-2.5 rounded-xl text-sm hover:bg-emerald-300 active:scale-[0.99] transition disabled:opacity-60"
-          title={!canSave ? "Choose at least 1 muscle group and 1 exercise in every day" : ""}
         >
-          {saving ? "Saving..." : "Save my plan"}
+          {saving ? "Saving..." : isEdit ? "Save changes" : "Save my plan"}
         </button>
-
-        {!canSave ? (
-          <div className="text-[11px] text-amber-300 text-center">
-            You must select at least 1 muscle group and 1 exercise in every day.
-          </div>
-        ) : null}
       </div>
     </AuthCard>
   );
