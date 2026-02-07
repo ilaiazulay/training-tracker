@@ -1,3 +1,4 @@
+// src/pages/Workout.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
@@ -59,6 +60,15 @@ export default function Workout() {
   const [dropMain, setDropMain] = useState({ weight: "", reps: "" });
   const [dropParts, setDropParts] = useState([{ weight: "", reps: "" }]);
   const [savingDrop, setSavingDrop] = useState(false);
+
+  // ✅ Switch exercise modal state
+  const [switchOpen, setSwitchOpen] = useState(false);
+  const [switchForWE, setSwitchForWE] = useState(null); // workoutExercise object
+  const [switchPool, setSwitchPool] = useState([]);
+  const [switchSearch, setSwitchSearch] = useState("");
+  const [switchPickId, setSwitchPickId] = useState(null);
+  const [switchSaving, setSwitchSaving] = useState(false);
+  const [switchError, setSwitchError] = useState(""); // ✅ errors shown ONLY inside modal
 
   // For add animation highlight
   const lastAddedSetIdRef = useRef(null);
@@ -176,7 +186,6 @@ export default function Workout() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || "Failed to add set");
 
-      // Save last added set id for highlight animation
       if (data?.set?.id) lastAddedSetIdRef.current = data.set.id;
 
       await refreshWorkout();
@@ -355,6 +364,103 @@ export default function Workout() {
     }
   }
 
+  // ✅ Load switch pool (all exercises) once when switch modal is opened
+  useEffect(() => {
+    if (!switchOpen || !accessToken) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        setSwitchError("");
+        const res = await fetch(`${API_BASE_URL}/exercises`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.message || "Failed to load exercises");
+        if (!cancelled) setSwitchPool(data.exercises || []);
+      } catch (e) {
+        if (!cancelled) setSwitchError(e.message);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [switchOpen, accessToken]);
+
+  function openSwitchModal(we) {
+    setSwitchError("");
+    setSwitchSearch("");
+    setSwitchPickId(null);
+
+    setSwitchForWE(we);
+    setSwitchOpen(true);
+  }
+
+  function closeSwitchModal() {
+    setSwitchOpen(false);
+    setSwitchForWE(null);
+    setSwitchPickId(null);
+    setSwitchSearch("");
+    setSwitchError("");
+  }
+
+  const switchCandidates = useMemo(() => {
+    if (!switchForWE) return [];
+    const currentId = switchForWE.exerciseId;
+
+    // Use plannedExercise.muscleGroup if exists, else current exercise muscleGroup
+    const mg =
+      switchForWE?.plannedExercise?.muscleGroup ||
+      switchForWE?.exercise?.muscleGroup ||
+      null;
+
+    const q = switchSearch.trim().toLowerCase();
+
+    return switchPool
+      .filter((e) => (mg ? e.muscleGroup === mg : true))
+      .filter((e) => e.id !== currentId)
+      .filter((e) => (!q ? true : String(e.name).toLowerCase().includes(q)))
+      .slice(0, 30);
+  }, [switchForWE, switchPool, switchSearch]);
+
+  async function submitSwitch() {
+    if (!switchForWE || !switchPickId) return;
+
+    try {
+      setSwitchError("");
+      setSwitchSaving(true);
+
+      const res = await fetch(
+        `${API_BASE_URL}/workouts/exercises/${switchForWE.id}/switch`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({ newExerciseId: switchPickId }),
+        }
+      );
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        // ✅ show inside modal ONLY
+        setSwitchError(data.message || "Failed to switch exercise");
+        return;
+      }
+
+      closeSwitchModal();
+      await refreshWorkout();
+    } catch (e) {
+      setSwitchError(e.message || "Failed to switch exercise");
+    } finally {
+      setSwitchSaving(false);
+    }
+  }
+
   if (!authData) return null;
 
   return (
@@ -387,7 +493,8 @@ export default function Workout() {
                   </span>
                 </div>
                 <div className="text-xs text-slate-400">
-                  Exercises: <span className="text-white font-medium">{workout.exercises.length}</span>
+                  Exercises:{" "}
+                  <span className="text-white font-medium">{workout.exercises.length}</span>
                 </div>
               </div>
 
@@ -397,12 +504,24 @@ export default function Workout() {
                 const lastText = formatStat(stats?.last);
                 const prText = formatStat(stats?.pr);
 
+                const plannedName =
+                  we?.plannedExercise?.name || we?.exercise?.name || "";
+
+                const performedName =
+                  we?.exercise?.name || "";
+
+                // ✅ show "Switched" only if substitution AND performed != planned
+                const isSwitched =
+                  !!we.isSubstitution &&
+                  !!we.plannedExerciseId &&
+                  we.exerciseId !== we.plannedExerciseId;
+
                 return (
                   <div key={we.id} className="rounded-2xl border border-white/15 bg-white/5 p-4 space-y-3">
                     <div className="flex items-start gap-4">
                       {/* Image */}
                       <div className="w-16 h-16 rounded-xl overflow-hidden bg-black/20 flex-shrink-0 border border-white/10">
-                        {we.exercise.imageUrl ? (
+                        {we.exercise?.imageUrl ? (
                           <img
                             src={we.exercise.imageUrl}
                             alt={we.exercise.name}
@@ -418,8 +537,25 @@ export default function Workout() {
 
                       {/* Name + stats */}
                       <div className="flex-1">
-                        <div className="text-white font-semibold">{we.exercise.name}</div>
-                        <div className="text-[11px] text-slate-400">{prettyMuscle(we.exercise.muscleGroup)}</div>
+                        <div className="flex items-center gap-2">
+                          <div className="text-white font-semibold">{performedName}</div>
+
+                          {isSwitched ? (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] border border-amber-300/30 bg-amber-400/10 text-amber-200">
+                              switched
+                            </span>
+                          ) : null}
+                        </div>
+
+                        <div className="text-[11px] text-slate-400">
+                          {prettyMuscle(we.exercise?.muscleGroup)}
+                        </div>
+
+                        {isSwitched ? (
+                          <div className="text-[11px] text-slate-400 mt-1">
+                            Planned: <span className="text-slate-200">{plannedName}</span>
+                          </div>
+                        ) : null}
 
                         <div className="flex flex-wrap gap-2 mt-2">
                           {lastText ? (
@@ -456,6 +592,14 @@ export default function Workout() {
                           className="px-3 py-1.5 rounded-xl text-sm border border-emerald-300/20 bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/15 active:scale-[0.98] transition"
                         >
                           + Drop
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => openSwitchModal(we)}
+                          className="px-3 py-1.5 rounded-xl text-sm border border-amber-300/20 bg-amber-400/10 text-amber-200 hover:bg-amber-400/15 active:scale-[0.98] transition"
+                        >
+                          Switch
                         </button>
                       </div>
                     </div>
@@ -614,7 +758,7 @@ export default function Workout() {
           )}
         </div>
 
-        {/* ✅ Drop set modal (OPEN/CLOSE animation handled inside Modal) */}
+        {/* ✅ Drop set modal */}
         <Modal
           open={!!dropOpenForWE}
           title="Add drop set"
@@ -721,6 +865,84 @@ export default function Workout() {
                 className="flex-1 py-2.5 rounded-2xl bg-emerald-400 text-slate-900 font-semibold hover:bg-emerald-300 transition text-sm disabled:opacity-60"
               >
                 {savingDrop ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+
+        {/* ✅ Switch exercise modal (errors shown ONLY here) */}
+        <Modal
+          open={switchOpen}
+          title="Switch exercise"
+          description={
+            switchForWE
+              ? `Choose a replacement for "${switchForWE.exercise?.name}". This will not change your plan.`
+              : ""
+          }
+          onClose={closeSwitchModal}
+          variant="center"
+        >
+          <div className="space-y-3">
+            {switchError ? (
+              <div className="rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+                {switchError}
+              </div>
+            ) : null}
+
+            <input
+              className="w-full bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-sm text-white outline-none focus:border-white/40"
+              placeholder="Search..."
+              value={switchSearch}
+              onChange={(e) => setSwitchSearch(e.target.value)}
+            />
+
+            <div className="max-h-60 overflow-auto space-y-2 pr-1">
+              {switchCandidates.length === 0 ? (
+                <div className="text-[12px] text-slate-400 px-2 py-3">
+                  No matching exercises found.
+                </div>
+              ) : (
+                switchCandidates.map((ex) => {
+                  const picked = switchPickId === ex.id;
+                  return (
+                    <button
+                      key={ex.id}
+                      type="button"
+                      onClick={() => setSwitchPickId(ex.id)}
+                      className={[
+                        "w-full text-left px-3 py-2 rounded-xl border transition",
+                        picked
+                          ? "bg-amber-400/20 border-amber-300/40 text-white"
+                          : "bg-white/5 border-white/15 text-slate-100 hover:bg-white/10",
+                      ].join(" ")}
+                    >
+                      <div className="text-sm">{ex.name}</div>
+                      <div className="text-[11px] text-slate-300">
+                        {prettyMuscle(ex.muscleGroup)}
+                        {ex.isGlobal ? " • global" : " • yours"}
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={closeSwitchModal}
+                className="flex-1 py-2.5 rounded-2xl border border-white/15 bg-white/5 text-white hover:bg-white/10 transition text-sm"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                disabled={!switchPickId || switchSaving}
+                onClick={submitSwitch}
+                className="flex-1 py-2.5 rounded-2xl bg-amber-300 text-slate-900 font-semibold hover:bg-amber-200 transition text-sm disabled:opacity-60"
+              >
+                {switchSaving ? "Switching..." : "Switch"}
               </button>
             </div>
           </div>
