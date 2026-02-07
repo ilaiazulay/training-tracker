@@ -44,6 +44,20 @@ function prefillFromLastBest(last) {
   return { weight: 0, reps: 0 };
 }
 
+// ✅ NEW: local draft helpers to avoid "typing gets overridden"
+function keyForSet(weId, setIndex, field) {
+  return `${weId}:${setIndex}:${field}`;
+}
+
+function onlyNumberLike(value, { allowDecimal }) {
+  const v = String(value ?? "");
+  if (v === "") return "";
+  const cleaned = v.replace(/[^\d.]/g, "");
+  if (!allowDecimal) return cleaned.replace(/\./g, "");
+  const parts = cleaned.split(".");
+  return parts.length <= 1 ? cleaned : `${parts[0]}.${parts.slice(1).join("")}`;
+}
+
 export default function Workout() {
   const { id } = useParams();
   const nav = useNavigate();
@@ -54,6 +68,9 @@ export default function Workout() {
   const [loading, setLoading] = useState(true);
   const [workout, setWorkout] = useState(null);
   const [completing, setCompleting] = useState(false);
+
+  // ✅ NEW: drafts for typing (prevents refreshWorkout from overwriting typing)
+  const [draft, setDraft] = useState({}); // { "weId:setIndex:weight": "60.5", ... }
 
   // Drop set modal state
   const [dropOpenForWE, setDropOpenForWE] = useState(null); // workoutExerciseId
@@ -218,7 +235,44 @@ export default function Workout() {
       await refreshWorkout();
     } catch (e) {
       setError(e.message);
+      throw e;
     }
+  }
+
+  // ✅ NEW: draft accessors
+  function getDraftValue(weId, setIndex, field, fallback) {
+    const k = keyForSet(weId, setIndex, field);
+    return draft[k] ?? String(fallback ?? "");
+  }
+
+  function setDraftValue(weId, setIndex, field, val) {
+    const k = keyForSet(weId, setIndex, field);
+    setDraft((d) => ({ ...d, [k]: val }));
+  }
+
+  async function commitDraft(weId, setIndex, currentSet) {
+    // Save BOTH fields together (so you don’t lose the other value)
+    const wKey = keyForSet(weId, setIndex, "weight");
+    const rKey = keyForSet(weId, setIndex, "reps");
+
+    const wStr = draft[wKey] ?? String(currentSet.weight ?? "");
+    const rStr = draft[rKey] ?? String(currentSet.reps ?? "");
+
+    // allow empty while typing -> treat empty as 0 on save
+    const w = wStr === "" ? 0 : Number(wStr);
+    const r = rStr === "" ? 0 : Number(rStr);
+
+    if (!Number.isFinite(w) || !Number.isFinite(r)) return;
+
+    await updateNormalSet(weId, setIndex, w, r);
+
+    // clear drafts after success
+    setDraft((d) => {
+      const next = { ...d };
+      delete next[wKey];
+      delete next[rKey];
+      return next;
+    });
   }
 
   async function updateAnySetById(setId, weight, reps) {
@@ -410,7 +464,6 @@ export default function Workout() {
     if (!switchForWE) return [];
     const currentId = switchForWE.exerciseId;
 
-    // Use plannedExercise.muscleGroup if exists, else current exercise muscleGroup
     const mg =
       switchForWE?.plannedExercise?.muscleGroup ||
       switchForWE?.exercise?.muscleGroup ||
@@ -447,7 +500,6 @@ export default function Workout() {
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        // ✅ show inside modal ONLY
         setSwitchError(data.message || "Failed to switch exercise");
         return;
       }
@@ -510,7 +562,6 @@ export default function Workout() {
                 const performedName =
                   we?.exercise?.name || "";
 
-                // ✅ show "Switched" only if substitution AND performed != planned
                 const isSwitched =
                   !!we.isSubstitution &&
                   !!we.plannedExerciseId &&
@@ -633,24 +684,39 @@ export default function Workout() {
                             >
                               <div className="text-xs text-slate-300 w-10">#{s.setIndex + 1}</div>
 
+                              {/* ✅ UPDATED: local typing + mobile decimal keyboard + Enter->blur */}
                               <input
                                 className="w-20 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40"
-                                type="number"
-                                step="0.5"
-                                value={s.weight}
-                                onChange={(e) =>
-                                  updateNormalSet(we.id, s.setIndex, e.target.value, s.reps)
-                                }
+                                type="text"
+                                inputMode="decimal"
+                                pattern="[0-9]*[.,]?[0-9]*"
+                                value={getDraftValue(we.id, s.setIndex, "weight", s.weight)}
+                                onChange={(e) => {
+                                  const v = onlyNumberLike(e.target.value, { allowDecimal: true }).replace(",", ".");
+                                  setDraftValue(we.id, s.setIndex, "weight", v);
+                                }}
+                                onBlur={() => commitDraft(we.id, s.setIndex, s)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") e.currentTarget.blur();
+                                }}
                               />
                               <div className="text-xs text-slate-400">kg</div>
 
+                              {/* ✅ UPDATED: local typing + numeric keyboard + Enter->blur */}
                               <input
                                 className="w-16 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40"
-                                type="number"
-                                value={s.reps}
-                                onChange={(e) =>
-                                  updateNormalSet(we.id, s.setIndex, s.weight, e.target.value)
-                                }
+                                type="text"
+                                inputMode="numeric"
+                                pattern="[0-9]*"
+                                value={getDraftValue(we.id, s.setIndex, "reps", s.reps)}
+                                onChange={(e) => {
+                                  const v = onlyNumberLike(e.target.value, { allowDecimal: false });
+                                  setDraftValue(we.id, s.setIndex, "reps", v);
+                                }}
+                                onBlur={() => commitDraft(we.id, s.setIndex, s)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") e.currentTarget.blur();
+                                }}
                               />
                               <div className="text-xs text-slate-400">reps</div>
 
