@@ -2,11 +2,20 @@
 @tailwind components;
 @tailwind utilities;
 
-.scrollbar-none::-webkit-scrollbar {
-  display: none;
-}
-.scrollbar-none {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
 }
 
+body {
+  overflow: hidden; /* prevent page scroll - only AuthCard content scrolls */
+}
+
+/* iOS Safari fix: allow modern viewport behavior */
+:root {
+  --sat: env(safe-area-inset-top);
+  --sar: env(safe-area-inset-right);
+  --sab: env(safe-area-inset-bottom);
+  --sal: env(safe-area-inset-left);
+}
