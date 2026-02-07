@@ -43,9 +43,6 @@ app.use(
   })
 );
 
-// ✅ make preflight always respond
-app.options("*", cors());
-
 app.use(express.json());
 
 app.get("/", (req, res) => {
