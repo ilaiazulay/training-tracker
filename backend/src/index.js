@@ -12,12 +12,40 @@ const workoutSessionRoutes = require("./routes/workoutSessionRoutes");
 const setRoutes = require("./routes/setRoutes");
 const statsRoutes = require("./routes/statsRoutes");
 
-
 dotenv.config();
 
 const app = express();
 
-app.use(cors({ origin: "http://localhost:5173", credentials: true }));
+/**
+ * ✅ CORS allowlist
+ * Put your Vercel domains here.
+ * You can also use env var for production.
+ */
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://training-tracker-iota.vercel.app",
+  // if you have a custom domain later, add it here
+];
+
+app.use(
+  cors({
+    origin: (origin, cb) => {
+      // allow requests with no origin (Postman, server-to-server, health checks)
+      if (!origin) return cb(null, true);
+
+      if (allowedOrigins.includes(origin)) return cb(null, true);
+
+      return cb(new Error("CORS blocked origin: " + origin));
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+
+// ✅ make preflight always respond
+app.options("*", cors());
+
 app.use(express.json());
 
 app.get("/", (req, res) => {
@@ -25,23 +53,14 @@ app.get("/", (req, res) => {
 });
 
 app.use("/user", userRoutes);
-
-// Auth routes
 app.use("/auth", authRoutes);
-
 app.use("/plan", planRoutes);
-
 app.use("/exercises", exerciseRoutes);
-
 app.use("/workout", workoutRoutes);
-
 app.use("/workouts", workoutSessionRoutes);
-
 app.use("/stats", statsRoutes);
-
 app.use("/", setRoutes);
 
-// Protected example route
 app.get("/me", authenticate, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
@@ -49,10 +68,7 @@ app.get("/me", authenticate, async (req, res) => {
       select: { id: true, email: true, name: true, planType: true },
     });
 
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
+    if (!user) return res.status(404).json({ message: "User not found" });
     return res.json({ user });
   } catch (err) {
     console.error("Me route error:", err);
