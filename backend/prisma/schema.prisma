@@ -43,6 +43,8 @@ model Exercise {
   createdByUser   User?    @relation("UserExercises", fields: [createdByUserId], references: [id])
 
   workoutExercises WorkoutExercise[]
+  plannedInWorkoutExercises WorkoutExercise[] @relation("PlannedExercise")
+
   userTrainingDayExercises UserTrainingDayExercise[]
 }
 
@@ -62,8 +64,18 @@ model WorkoutExercise {
   id         Int       @id @default(autoincrement())
   workout    Workout   @relation(fields: [workoutId], references: [id])
   workoutId  Int
+
+  // ✅ performed (what user actually did)
   exercise   Exercise  @relation(fields: [exerciseId], references: [id])
   exerciseId Int
+
+  // ✅ planned (from plan, optional)
+  plannedExerciseId Int?
+  plannedExercise   Exercise? @relation("PlannedExercise", fields: [plannedExerciseId], references: [id])
+
+  // optional UI helper
+  isSubstitution Boolean @default(false)
+
   orderIndex Int
   targetSets Int
 

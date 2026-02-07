@@ -12,18 +12,23 @@ const {
   createDropSetGroup,
   updateSetById,
   deleteDropSetGroup,
+  switchWorkoutExercise,
 } = require("../controllers/workoutSessionController");
 
+// ✅ Switch exercise (must be authenticated)
+router.patch("/exercises/:workoutExerciseId/switch", auth, switchWorkoutExercise);
+
+// Workout
 router.get("/:id", auth, getWorkoutById);
 router.post("/:id/complete", auth, completeWorkout);
 
-// Normal sets (your current flow)
+// Normal sets
 router.post("/:id/sets", auth, upsertNormalSet);
 router.delete("/:id/sets/:setId", auth, deleteSet);
 
-// Drop sets (new)
+// Drop sets
 router.post("/:id/dropsets", auth, createDropSetGroup);
-router.patch("/:id/sets/:setId", auth, updateSetById); // edit any set (drop or normal)
+router.patch("/:id/sets/:setId", auth, updateSetById);
 router.delete("/:id/dropsets/:groupId", auth, deleteDropSetGroup);
 
 module.exports = router;

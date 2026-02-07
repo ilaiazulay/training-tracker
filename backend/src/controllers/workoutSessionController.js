@@ -201,7 +201,8 @@ async function getWorkoutById(req, res) {
       include: {
         exercises: {
           include: {
-            exercise: true,
+            exercise: true,          // performed
+            plannedExercise: true,   // planned
             sets: true,
           },
           orderBy: { orderIndex: "asc" },
@@ -232,7 +233,15 @@ async function getWorkoutById(req, res) {
       await prisma.workoutExercise.createMany({
         data: trainingDay.exercises.map((row) => ({
           workoutId: workout.id,
+
+          // performed exercise (starts as planned)
           exerciseId: row.exerciseId,
+
+          // planned exercise (never changes)
+          plannedExerciseId: row.exerciseId,
+
+          isSubstitution: false,
+
           orderIndex: row.orderIndex,
           targetSets: 0,
         })),
@@ -243,7 +252,8 @@ async function getWorkoutById(req, res) {
         include: {
           exercises: {
             include: {
-              exercise: true,
+              exercise: true,          // performed
+              plannedExercise: true,   // planned  ✅ ADD THIS
               sets: true,
             },
             orderBy: { orderIndex: "asc" },
@@ -590,6 +600,99 @@ async function completeWorkout(req, res) {
   }
 }
 
+async function switchWorkoutExercise(req, res) {
+  try {
+    const userId = req.user.id;
+    const workoutExerciseId = Number(req.params.workoutExerciseId);
+    const newExerciseId = Number(req.body?.newExerciseId);
+
+    if (!Number.isInteger(workoutExerciseId) || !Number.isInteger(newExerciseId)) {
+      return res.status(400).json({ message: "Invalid ids" });
+    }
+
+    // 1) Load workoutExercise + workout + plannedExercise
+    const we = await prisma.workoutExercise.findFirst({
+      where: {
+        id: workoutExerciseId,
+        workout: { userId },
+      },
+      include: {
+        workout: { select: { id: true, status: true } },
+        plannedExercise: { select: { id: true, muscleGroup: true, name: true } },
+        exercise: { select: { id: true } },
+      },
+    });
+
+    if (!we) {
+      return res.status(404).json({ message: "Workout exercise not found" });
+    }
+
+    // 2) Must be planned workout
+    if (we.workout.status !== "PLANNED") {
+      return res.status(400).json({ message: "Workout is already completed" });
+    }
+
+    // 3) Validate new exercise exists + allowed for user
+    const newEx = await prisma.exercise.findFirst({
+      where: {
+        id: newExerciseId,
+        OR: [{ isGlobal: true }, { createdByUserId: userId }],
+      },
+      select: {
+        id: true,
+        name: true,
+        muscleGroup: true,
+      },
+    });
+
+    if (!newEx) {
+      return res.status(404).json({ message: "Exercise not found" });
+    }
+
+    // 4) Muscle group must match planned
+    if (newEx.muscleGroup !== we.plannedExercise.muscleGroup) {
+      return res.status(400).json({
+        message: `Invalid exercise. Must be ${we.plannedExercise.muscleGroup}`,
+      });
+    }
+
+    // 5) Optional: prevent duplicates inside same workout
+    // (This is optional but recommended)
+    const duplicate = await prisma.workoutExercise.findFirst({
+      where: {
+        workoutId: we.workoutId,
+        exerciseId: newExerciseId,
+        NOT: { id: we.id },
+      },
+      select: { id: true },
+    });
+
+    if (duplicate) {
+      return res.status(400).json({
+        message: "This exercise already exists in this workout",
+      });
+    }
+
+    // 6) Determine if substitution
+    const isSubstitution = newExerciseId !== we.plannedExerciseId;
+
+    // 7) Update
+    await prisma.workoutExercise.update({
+      where: { id: we.id },
+      data: {
+        exerciseId: newExerciseId,
+        isSubstitution,
+      },
+    });
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("switchWorkoutExercise error:", err);
+    return res.status(500).json({ message: "Failed to switch exercise" });
+  }
+}
+
+
 module.exports = {
   getWorkoutById,
   completeWorkout,
@@ -600,4 +703,6 @@ module.exports = {
   createDropSetGroup,
   updateSetById,
   deleteDropSetGroup,
+
+  switchWorkoutExercise,
 };
