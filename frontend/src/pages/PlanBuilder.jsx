@@ -1,7 +1,9 @@
+// src/pages/PlanBuilder.jsx
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import AuthCard from "../components/AuthCard";
 import ErrorAlert from "../components/ErrorAlert";
+import Spinner from "../components/Spinner";
 import { getAuthData, saveAuthData } from "../auth";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
@@ -22,7 +24,7 @@ function getDayKeys(planType) {
   if (planType === "AB") return ["A", "B"];
   if (planType === "ABC") return ["A", "B", "C"];
   if (planType === "ABCD") return ["A", "B", "C", "D"];
-  return ["A"]; // FULL_BODY etc.
+  return ["A"];
 }
 
 function makeEmptyDaysState(dayKeys) {
@@ -39,10 +41,7 @@ export default function PlanBuilder() {
   const authData = getAuthData();
   const token = authData?.tokens?.accessToken;
 
-  const dayKeys = useMemo(
-    () => getDayKeys(authData?.user?.planType),
-    [authData?.user?.planType]
-  );
+  const dayKeys = useMemo(() => getDayKeys(authData?.user?.planType), [authData?.user?.planType]);
 
   const [activeDay, setActiveDay] = useState(() => dayKeys[0] || "A");
 
@@ -50,25 +49,25 @@ export default function PlanBuilder() {
   const [saving, setSaving] = useState(false);
 
   const [exercisePool, setExercisePool] = useState([]);
-  const [search, setSearch] = useState("");
+  const [loadingPool, setLoadingPool] = useState(true);
 
+  const [loadingPlan, setLoadingPlan] = useState(isEdit);
+
+  const [search, setSearch] = useState("");
   const [daysState, setDaysState] = useState(() => makeEmptyDaysState(dayKeys));
 
   const [newExName, setNewExName] = useState("");
   const [newExGroup, setNewExGroup] = useState("CHEST");
 
-  // Redirect if not logged in
   useEffect(() => {
     if (!authData || !token) nav("/");
   }, [authData, token, nav]);
 
-  // Keep activeDay valid if planType changes
   useEffect(() => {
     if (!dayKeys.includes(activeDay)) setActiveDay(dayKeys[0] || "A");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dayKeys.join("|")]);
 
-  // Ensure daysState keys match plan split (only update if needed)
   useEffect(() => {
     setDaysState((prev) => {
       let changed = false;
@@ -102,14 +101,19 @@ export default function PlanBuilder() {
     (async () => {
       try {
         setError("");
+        setLoadingPool(true);
+
         const res = await fetch(`${API_BASE_URL}/exercises`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.message || "Failed to load exercises");
+
         if (!cancelled) setExercisePool(data.exercises || []);
       } catch (e) {
         if (!cancelled) setError(e.message);
+      } finally {
+        if (!cancelled) setLoadingPool(false);
       }
     })();
 
@@ -118,58 +122,60 @@ export default function PlanBuilder() {
     };
   }, [token]);
 
-  // ✅ NEW: Load current saved plan when editing
-useEffect(() => {
-  if (!token || !isEdit) return;
-
-  let cancelled = false;
-
-  (async () => {
-    try {
-      setError("");
-
-      const res = await fetch(`${API_BASE_URL}/plan/me`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.message || "Failed to load current plan");
-
-      const incoming = makeEmptyDaysState(dayKeys);
-
-      for (const day of data.days || []) {
-        if (!incoming[day.dayKey]) continue;
-
-        incoming[day.dayKey] = {
-          muscleGroups: Array.isArray(day.muscleGroups) ? day.muscleGroups : [],
-          exerciseIds: Array.isArray(day.exerciseIds) ? day.exerciseIds : [],
-        };
-      }
-
-      if (!cancelled) setDaysState(incoming);
-    } catch (e) {
-      if (!cancelled) setError(e.message);
+  // Load current saved plan when editing
+  useEffect(() => {
+    if (!token || !isEdit) {
+      setLoadingPlan(false);
+      return;
     }
-  })();
 
-  return () => {
-    cancelled = true;
-  };
-// eslint-disable-next-line react-hooks/exhaustive-deps
-}, [token, isEdit, dayKeys.join("|")]);
+    let cancelled = false;
 
+    (async () => {
+      try {
+        setError("");
+        setLoadingPlan(true);
+
+        const res = await fetch(`${API_BASE_URL}/plan/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.message || "Failed to load current plan");
+
+        const incoming = makeEmptyDaysState(dayKeys);
+
+        for (const day of data.days || []) {
+          if (!incoming[day.dayKey]) continue;
+
+          incoming[day.dayKey] = {
+            muscleGroups: Array.isArray(day.muscleGroups) ? day.muscleGroups : [],
+            exerciseIds: Array.isArray(day.exerciseIds) ? day.exerciseIds : [],
+          };
+        }
+
+        if (!cancelled) setDaysState(incoming);
+      } catch (e) {
+        if (!cancelled) setError(e.message);
+      } finally {
+        if (!cancelled) setLoadingPlan(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, isEdit, dayKeys.join("|")]);
 
   if (!authData) return null;
 
   const selectedIds = daysState[activeDay]?.exerciseIds || [];
   const selectedGroupsForDay = daysState[activeDay]?.muscleGroups || [];
 
-  // Keep newExGroup valid for the active day
   useEffect(() => {
     if (selectedGroupsForDay.length === 0) return;
-    if (!selectedGroupsForDay.includes(newExGroup)) {
-      setNewExGroup(selectedGroupsForDay[0]);
-    }
+    if (!selectedGroupsForDay.includes(newExGroup)) setNewExGroup(selectedGroupsForDay[0]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeDay, selectedGroupsForDay.join("|")]);
 
@@ -177,9 +183,7 @@ useEffect(() => {
     setDaysState((prev) => {
       const cur = prev[dayKey] || { muscleGroups: [], exerciseIds: [] };
       const exists = cur.muscleGroups.includes(mg);
-      const muscleGroups = exists
-        ? cur.muscleGroups.filter((x) => x !== mg)
-        : [...cur.muscleGroups, mg];
+      const muscleGroups = exists ? cur.muscleGroups.filter((x) => x !== mg) : [...cur.muscleGroups, mg];
       return { ...prev, [dayKey]: { ...cur, muscleGroups } };
     });
   };
@@ -188,9 +192,7 @@ useEffect(() => {
     setDaysState((prev) => {
       const cur = prev[dayKey] || { muscleGroups: [], exerciseIds: [] };
       const exists = cur.exerciseIds.includes(exId);
-      const exerciseIds = exists
-        ? cur.exerciseIds.filter((x) => x !== exId)
-        : [...cur.exerciseIds, exId];
+      const exerciseIds = exists ? cur.exerciseIds.filter((x) => x !== exId) : [...cur.exerciseIds, exId];
       return { ...prev, [dayKey]: { ...cur, exerciseIds } };
     });
   };
@@ -207,23 +209,16 @@ useEffect(() => {
     return poolForActiveDay.filter((e) => e.name.toLowerCase().includes(q));
   }, [poolForActiveDay, search]);
 
-  const suggestions = useMemo(
-    () => filteredPool.slice(0, 12).map((e) => e.name),
-    [filteredPool]
-  );
+  const suggestions = useMemo(() => filteredPool.slice(0, 12).map((e) => e.name), [filteredPool]);
 
   const createCustomExercise = async () => {
     try {
       setError("");
 
-      if (selectedGroupsForDay.length === 0) {
-        throw new Error(`Select muscle groups for Day ${activeDay} first.`);
-      }
+      if (selectedGroupsForDay.length === 0) throw new Error(`Select muscle groups for Day ${activeDay} first.`);
 
       const name = newExName.trim();
-      if (name.length < 2 || name.length > 60) {
-        throw new Error("Exercise name must be 2–60 characters.");
-      }
+      if (name.length < 2 || name.length > 60) throw new Error("Exercise name must be 2–60 characters.");
 
       if (!selectedGroupsForDay.includes(newExGroup)) {
         throw new Error("Muscle group must be one of the selected groups for this day.");
@@ -255,12 +250,8 @@ useEffect(() => {
       setSaving(true);
 
       for (const k of dayKeys) {
-        if (!daysState[k] || daysState[k].muscleGroups.length === 0) {
-          throw new Error(`Day ${k} must have at least 1 muscle group selected`);
-        }
-        if (!daysState[k] || daysState[k].exerciseIds.length === 0) {
-          throw new Error(`Day ${k} must have at least 1 exercise`);
-        }
+        if (!daysState[k] || daysState[k].muscleGroups.length === 0) throw new Error(`Day ${k} must have at least 1 muscle group selected`);
+        if (!daysState[k] || daysState[k].exerciseIds.length === 0) throw new Error(`Day ${k} must have at least 1 exercise`);
       }
 
       const payload = {
@@ -303,200 +294,203 @@ useEffect(() => {
     });
   }, [dayKeys, daysState]);
 
+  const pageLoading = loadingPool || loadingPlan;
+
   return (
     <AuthCard title={isEdit ? "Edit your plan" : "Build your plan"} onBack={() => nav(-1)}>
-      <div className="space-y-4">
+      <div className="flex flex-col min-h-[420px]">
         <ErrorAlert message={error} />
 
-        {/* Day tabs */}
-        <div className="flex justify-center gap-2">
-          {dayKeys.map((k) => (
-            <button
-              key={k}
-              type="button"
-              onClick={() => setActiveDay(k)}
-              className={`px-3 py-1.5 rounded-full text-xs border transition ${
-                activeDay === k
-                  ? "bg-white text-slate-900 border-white"
-                  : "bg-white/5 text-slate-100 border-white/15 hover:bg-white/10"
-              }`}
-            >
-              Day {k}
-            </button>
-          ))}
-        </div>
-
-        {/* Muscle groups */}
-        <div className="rounded-2xl border border-white/15 bg-white/5 p-3">
-          <div className="flex items-center justify-between">
-            <div className="text-xs text-slate-300">Muscle groups for Day {activeDay}</div>
-            <div className="text-[11px] text-slate-400">Required</div>
+        {pageLoading ? (
+          <div className="flex flex-1 items-center justify-center">
+            <Spinner size="lg" label={loadingPlan ? "Loading your plan..." : "Loading exercises..."} />
           </div>
-
-          <div className="flex flex-wrap gap-2 mt-3">
-            {MUSCLE_GROUPS.map((mg) => {
-              const active = selectedGroupsForDay.includes(mg);
-              return (
+        ) : (
+          <div className="space-y-4">
+            <div className="flex justify-center gap-2">
+              {dayKeys.map((k) => (
                 <button
-                  key={mg}
+                  key={k}
                   type="button"
-                  onClick={() => toggleMuscle(activeDay, mg)}
-                  className={`px-2.5 py-1.5 rounded-full text-[11px] border transition ${
-                    active
-                      ? "bg-emerald-400 text-slate-900 border-emerald-300"
+                  onClick={() => setActiveDay(k)}
+                  className={`px-3 py-1.5 rounded-full text-xs border transition ${
+                    activeDay === k
+                      ? "bg-white text-slate-900 border-white"
                       : "bg-white/5 text-slate-100 border-white/15 hover:bg-white/10"
                   }`}
                 >
-                  {mg.replaceAll("_", " ").toLowerCase()}
+                  Day {k}
                 </button>
-              );
-            })}
-          </div>
-
-          {selectedGroupsForDay.length === 0 ? (
-            <div className="text-[11px] text-amber-300 mt-3">
-              Select at least 1 muscle group for Day {activeDay}.
-            </div>
-          ) : null}
-        </div>
-
-        {/* Selected exercises */}
-        <div className="rounded-2xl border border-white/15 bg-white/5 p-3">
-          <div className="flex items-center justify-between">
-            <div className="text-xs text-slate-300">Selected for Day {activeDay}</div>
-            <div className="text-[11px] text-slate-400">{selectedIds.length} selected</div>
-          </div>
-
-          {selectedIds.length === 0 ? (
-            <div className="text-[11px] text-slate-400 mt-2">No exercises selected yet.</div>
-          ) : (
-            <div className="flex flex-wrap gap-2 mt-3">
-              {selectedIds.map((id) => {
-                const ex = exercisePool.find((x) => x.id === id);
-                if (!ex) return null;
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => toggleExercise(activeDay, id)}
-                    className="px-3 py-1.5 rounded-full text-[11px] border border-emerald-400/40 bg-emerald-400/15 text-white hover:bg-emerald-400/25 transition"
-                    title="Click to remove"
-                  >
-                    {ex.name} <span className="opacity-70">✕</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* Add custom exercise */}
-        <div className="rounded-2xl border border-white/15 bg-white/5 p-3 space-y-2">
-          <div className="text-xs text-slate-300">Add your own exercise</div>
-
-          {selectedGroupsForDay.length === 0 ? (
-            <div className="text-[11px] text-amber-300">
-              Select muscle groups for Day {activeDay} first to add a custom exercise.
-            </div>
-          ) : null}
-
-          <div className="grid grid-cols-3 gap-2">
-            <input
-              className="col-span-2 bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-sm text-white outline-none focus:border-white/40"
-              placeholder="Exercise name"
-              value={newExName}
-              onChange={(e) => setNewExName(e.target.value)}
-            />
-
-            <select
-              className="bg-white/5 border border-white/15 rounded-xl px-2 py-2 text-sm text-white outline-none focus:border-white/40 disabled:opacity-50"
-              value={newExGroup}
-              onChange={(e) => setNewExGroup(e.target.value)}
-              disabled={selectedGroupsForDay.length === 0}
-            >
-              {selectedGroupsForDay.map((mg) => (
-                <option key={mg} value={mg} className="bg-slate-900 text-white">
-                  {mg.replaceAll("_", " ").toLowerCase()}
-                </option>
               ))}
-            </select>
-          </div>
-
-          <button
-            type="button"
-            onClick={createCustomExercise}
-            disabled={selectedGroupsForDay.length === 0}
-            className="w-full bg-white text-slate-900 font-medium py-2 rounded-xl text-sm hover:bg-slate-100 active:scale-[0.99] transition disabled:opacity-60"
-          >
-            Add exercise
-          </button>
-        </div>
-
-        {/* Exercise pool */}
-        <div className="rounded-2xl border border-white/15 bg-white/5 p-3">
-          <div className="text-xs text-slate-300 mb-2">Pick exercises</div>
-
-          {selectedGroupsForDay.length === 0 ? (
-            <div className="text-[11px] text-slate-400 px-2 py-3">
-              Choose muscle groups above to see matching exercises.
             </div>
-          ) : (
-            <>
-              <input
-                list="exercise-suggestions"
-                className="w-full mb-2 bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-sm text-white outline-none focus:border-white/40"
-                placeholder="Type to search..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
 
-              <datalist id="exercise-suggestions">
-                {suggestions.map((name) => (
-                  <option key={name} value={name} />
-                ))}
-              </datalist>
+            <div className="rounded-2xl border border-white/15 bg-white/5 p-3">
+              <div className="flex items-center justify-between">
+                <div className="text-xs text-slate-300">Muscle groups for Day {activeDay}</div>
+                <div className="text-[11px] text-slate-400">Required</div>
+              </div>
 
-              <div className="max-h-60 overflow-auto space-y-2 pr-1">
-                {filteredPool.length === 0 ? (
-                  <div className="text-[11px] text-slate-400 px-2 py-3">
-                    No matches. Try a different search or add a custom exercise.
-                  </div>
-                ) : (
-                  filteredPool.map((ex) => {
-                    const picked = selectedIds.includes(ex.id);
+              <div className="flex flex-wrap gap-2 mt-3">
+                {MUSCLE_GROUPS.map((mg) => {
+                  const active = selectedGroupsForDay.includes(mg);
+                  return (
+                    <button
+                      key={mg}
+                      type="button"
+                      onClick={() => toggleMuscle(activeDay, mg)}
+                      className={`px-2.5 py-1.5 rounded-full text-[11px] border transition ${
+                        active
+                          ? "bg-emerald-400 text-slate-900 border-emerald-300"
+                          : "bg-white/5 text-slate-100 border-white/15 hover:bg-white/10"
+                      }`}
+                    >
+                      {mg.replaceAll("_", " ").toLowerCase()}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {selectedGroupsForDay.length === 0 ? (
+                <div className="text-[11px] text-amber-300 mt-3">Select at least 1 muscle group for Day {activeDay}.</div>
+              ) : null}
+            </div>
+
+            <div className="rounded-2xl border border-white/15 bg-white/5 p-3">
+              <div className="flex items-center justify-between">
+                <div className="text-xs text-slate-300">Selected for Day {activeDay}</div>
+                <div className="text-[11px] text-slate-400">{selectedIds.length} selected</div>
+              </div>
+
+              {selectedIds.length === 0 ? (
+                <div className="text-[11px] text-slate-400 mt-2">No exercises selected yet.</div>
+              ) : (
+                <div className="flex flex-wrap gap-2 mt-3">
+                  {selectedIds.map((id) => {
+                    const ex = exercisePool.find((x) => x.id === id);
+                    if (!ex) return null;
                     return (
                       <button
-                        key={ex.id}
+                        key={id}
                         type="button"
-                        onClick={() => toggleExercise(activeDay, ex.id)}
-                        className={`w-full text-left px-3 py-2 rounded-xl border transition ${
-                          picked
-                            ? "bg-emerald-400/20 border-emerald-400/40 text-white"
-                            : "bg-white/5 border-white/15 text-slate-100 hover:bg-white/10"
-                        }`}
+                        onClick={() => toggleExercise(activeDay, id)}
+                        className="px-3 py-1.5 rounded-full text-[11px] border border-emerald-400/40 bg-emerald-400/15 text-white hover:bg-emerald-400/25 transition"
+                        title="Click to remove"
                       >
-                        <div className="text-sm">{ex.name}</div>
-                        <div className="text-[11px] text-slate-300">
-                          {String(ex.muscleGroup).replaceAll("_", " ").toLowerCase()}
-                          {ex.isGlobal ? " • global" : " • yours"}
-                        </div>
+                        {ex.name} <span className="opacity-70">✕</span>
                       </button>
                     );
-                  })
-                )}
-              </div>
-            </>
-          )}
-        </div>
+                  })}
+                </div>
+              )}
+            </div>
 
-        <button
-          type="button"
-          disabled={saving || !canSave}
-          onClick={savePlan}
-          className="w-full bg-emerald-400 text-slate-900 font-medium py-2.5 rounded-xl text-sm hover:bg-emerald-300 active:scale-[0.99] transition disabled:opacity-60"
-        >
-          {saving ? "Saving..." : isEdit ? "Save changes" : "Save my plan"}
-        </button>
+            <div className="rounded-2xl border border-white/15 bg-white/5 p-3 space-y-2">
+              <div className="text-xs text-slate-300">Add your own exercise</div>
+
+              {selectedGroupsForDay.length === 0 ? (
+                <div className="text-[11px] text-amber-300">
+                  Select muscle groups for Day {activeDay} first to add a custom exercise.
+                </div>
+              ) : null}
+
+              <div className="grid grid-cols-3 gap-2">
+                <input
+                  className="col-span-2 bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-sm text-white outline-none focus:border-white/40"
+                  placeholder="Exercise name"
+                  value={newExName}
+                  onChange={(e) => setNewExName(e.target.value)}
+                />
+
+                <select
+                  className="bg-white/5 border border-white/15 rounded-xl px-2 py-2 text-sm text-white outline-none focus:border-white/40 disabled:opacity-50"
+                  value={newExGroup}
+                  onChange={(e) => setNewExGroup(e.target.value)}
+                  disabled={selectedGroupsForDay.length === 0}
+                >
+                  {selectedGroupsForDay.map((mg) => (
+                    <option key={mg} value={mg} className="bg-slate-900 text-white">
+                      {mg.replaceAll("_", " ").toLowerCase()}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <button
+                type="button"
+                onClick={createCustomExercise}
+                disabled={selectedGroupsForDay.length === 0}
+                className="w-full bg-white text-slate-900 font-medium py-2 rounded-xl text-sm hover:bg-slate-100 active:scale-[0.99] transition disabled:opacity-60"
+              >
+                Add exercise
+              </button>
+            </div>
+
+            <div className="rounded-2xl border border-white/15 bg-white/5 p-3">
+              <div className="text-xs text-slate-300 mb-2">Pick exercises</div>
+
+              {selectedGroupsForDay.length === 0 ? (
+                <div className="text-[11px] text-slate-400 px-2 py-3">
+                  Choose muscle groups above to see matching exercises.
+                </div>
+              ) : (
+                <>
+                  <input
+                    list="exercise-suggestions"
+                    className="w-full mb-2 bg-white/5 border border-white/15 rounded-xl px-3 py-2 text-sm text-white outline-none focus:border-white/40"
+                    placeholder="Type to search..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+
+                  <datalist id="exercise-suggestions">
+                    {suggestions.map((name) => (
+                      <option key={name} value={name} />
+                    ))}
+                  </datalist>
+
+                  <div className="max-h-60 overflow-auto space-y-2 pr-1">
+                    {filteredPool.length === 0 ? (
+                      <div className="text-[11px] text-slate-400 px-2 py-3">
+                        No matches. Try a different search or add a custom exercise.
+                      </div>
+                    ) : (
+                      filteredPool.map((ex) => {
+                        const picked = selectedIds.includes(ex.id);
+                        return (
+                          <button
+                            key={ex.id}
+                            type="button"
+                            onClick={() => toggleExercise(activeDay, ex.id)}
+                            className={`w-full text-left px-3 py-2 rounded-xl border transition ${
+                              picked
+                                ? "bg-emerald-400/20 border-emerald-400/40 text-white"
+                                : "bg-white/5 border-white/15 text-slate-100 hover:bg-white/10"
+                            }`}
+                          >
+                            <div className="text-sm">{ex.name}</div>
+                            <div className="text-[11px] text-slate-300">
+                              {String(ex.muscleGroup).replaceAll("_", " ").toLowerCase()}
+                              {ex.isGlobal ? " • global" : " • yours"}
+                            </div>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+
+            <button
+              type="button"
+              disabled={saving || !canSave}
+              onClick={savePlan}
+              className="w-full bg-emerald-400 text-slate-900 font-medium py-2.5 rounded-xl text-sm hover:bg-emerald-300 active:scale-[0.99] transition disabled:opacity-60"
+            >
+              {saving ? "Saving..." : isEdit ? "Save changes" : "Save my plan"}
+            </button>
+          </div>
+        )}
       </div>
     </AuthCard>
   );

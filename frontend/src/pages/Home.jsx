@@ -1,7 +1,9 @@
+// src/pages/Home.jsx
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import AuthCard from "../components/AuthCard";
 import ErrorAlert from "../components/ErrorAlert";
+import Spinner from "../components/Spinner";
 import { getAuthData, clearAuthData } from "../auth";
 
 import ProgressCard from "../components/home/ProgressCard";
@@ -42,7 +44,7 @@ function minutesSince(isoOrDate) {
 
 export default function Home() {
   const nav = useNavigate();
-  
+
   const [authData] = useState(() => getAuthData());
   const token = authData?.tokens?.accessToken;
 
@@ -54,7 +56,6 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
 
   const confirmNewWorkout = useModal();
-  const infoModal = useModal();
 
   const [minuteTick, setMinuteTick] = useState(0);
   useEffect(() => {
@@ -75,20 +76,25 @@ export default function Home() {
 
   async function loadHome() {
     if (!token) return;
+
     try {
       setError("");
       setLoading(true);
+
       const res = await fetch(`${API_BASE_URL}/workout/today`, {
         headers: { Authorization: `Bearer ${token}` },
       });
+
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || "Failed to load home");
 
       setToday(data);
+
       const defaultKey =
         data?.activeWorkout?.planDay ||
         data?.recommendedDayKey ||
         (data?.dayKeys?.[0] ?? "");
+
       setSelectedWorkout(defaultKey);
     } catch (e) {
       setError(e.message);
@@ -100,6 +106,7 @@ export default function Home() {
 
   useEffect(() => {
     if (token) loadHome();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   const activeWorkout = today?.activeWorkout || null;
@@ -112,29 +119,40 @@ export default function Home() {
     }
 
     let cancelled = false;
+
     (async () => {
       try {
         const res = await fetch(`${API_BASE_URL}/workouts/${activeWorkoutId}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
+
         const data = await res.json().catch(() => ({}));
         if (!res.ok) return;
+
         if (!cancelled) setActiveWorkoutFull(data.workout);
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     })();
-    return () => { cancelled = true; };
+
+    return () => {
+      cancelled = true;
+    };
   }, [token, activeWorkoutId]);
 
   const hasActiveToday = !!activeWorkoutId && isFromToday(activeWorkout);
-  const hasActiveForSelected = hasActiveToday && activeWorkout?.planDay === selectedWorkout;
+  const hasActiveForSelected =
+    hasActiveToday && activeWorkout?.planDay === selectedWorkout;
 
   const progress = useMemo(() => {
     if (!activeWorkoutFull?.exercises?.length) return null;
     const total = activeWorkoutFull.exercises.length;
     let done = 0;
+
     for (const we of activeWorkoutFull.exercises) {
       if ((we?.sets?.length || 0) > 0) done += 1;
     }
+
     return { done, total, pct: Math.round((done / total) * 100) };
   }, [activeWorkoutFull]);
 
@@ -159,18 +177,23 @@ export default function Home() {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
     });
+
     if (!res.ok) throw new Error("Failed to discard workout");
   }
 
   async function onNewWorkout() {
     if (!today) return;
+
     if (hasActiveToday) {
       confirmNewWorkout.show({
         title: "Workout in progress",
-        description: `You already have a workout in progress today (${workoutLabel(activeWorkout.planDay)}). Starting a new workout will discard it.`,
+        description: `You already have a workout in progress today (${workoutLabel(
+          activeWorkout.planDay
+        )}). Starting a new workout will discard it.`,
       });
       return;
     }
+
     startWorkout();
   }
 
@@ -178,6 +201,7 @@ export default function Home() {
     try {
       setError("");
       setBusy(true);
+
       const res = await fetch(`${API_BASE_URL}/workout/start`, {
         method: "POST",
         headers: {
@@ -186,12 +210,16 @@ export default function Home() {
         },
         body: JSON.stringify({ dayKey: selectedWorkout }),
       });
+
       const data = await res.json().catch(() => ({}));
+
       if (res.status === 409 && data.workout?.id) {
         nav(`/workout/${data.workout.id}`);
         return;
       }
+
       if (!res.ok) throw new Error(data.message || "Failed to start workout");
+
       await loadHome();
       nav(`/workout/${data.workout.id}`);
     } catch (e) {
@@ -204,7 +232,7 @@ export default function Home() {
   if (!authData) return null;
 
   return (
-    <AuthCard 
+    <AuthCard
       title="Home"
       topRight={
         <button
@@ -224,19 +252,32 @@ export default function Home() {
         />
       }
     >
-      <div className="space-y-4">
+      {/* IMPORTANT:
+          We want loading spinner to be centered INSIDE the card content area.
+          So we keep a flex container with min height.
+      */}
+      <div className="flex flex-col min-h-[420px]">
         <ErrorAlert message={error} />
 
         {loading ? (
-          <div className="text-center text-slate-300 text-sm mt-10">Loading...</div>
+          <div className="flex flex-1 items-center justify-center">
+            <Spinner size="lg" label="Loading home..." />
+          </div>
         ) : !today ? (
-          <div className="text-center text-slate-300 text-sm mt-10">No data</div>
+          <div className="flex flex-1 items-center justify-center">
+            <div className="text-center text-slate-300 text-sm">No data</div>
+          </div>
         ) : (
-          <>
+          <div className="space-y-4">
             <div className="flex items-center gap-3">
-              <div className="h-9 w-9 rounded-full border border-white/15 bg-white/10 flex items-center justify-center text-white">👤</div>
+              <div className="h-9 w-9 rounded-full border border-white/15 bg-white/10 flex items-center justify-center text-white">
+                👤
+              </div>
               <div className="text-sm text-slate-300">
-                Welcome back, <span className="text-white font-medium">{authData?.user?.name || "Athlete"}</span>
+                Welcome back,{" "}
+                <span className="text-white font-medium">
+                  {authData?.user?.name || "Athlete"}
+                </span>
               </div>
             </div>
 
@@ -244,7 +285,11 @@ export default function Home() {
               <ProgressCard
                 workoutLabel={workoutLabel(activeWorkout.planDay)}
                 progressPct={progress?.pct ?? 0}
-                progressText={progress ? `${progress.done}/${progress.total} exercises done` : "In progress"}
+                progressText={
+                  progress
+                    ? `${progress.done}/${progress.total} exercises done`
+                    : "In progress"
+                }
                 totalTimeText={totalMins === null ? "—" : String(totalMins)}
                 totalTimeUnit={"mins"}
                 currentExerciseName={currentExerciseName}
@@ -262,7 +307,7 @@ export default function Home() {
               onContinue={onContinue}
               onNewWorkout={onNewWorkout}
             />
-          </>
+          </div>
         )}
       </div>
 
@@ -274,14 +319,21 @@ export default function Home() {
         variant="center"
       >
         <div className="flex gap-2">
-          <button type="button" onClick={confirmNewWorkout.close} className="flex-1 py-2.5 rounded-2xl border border-white/15 bg-white/5 text-white text-sm hover:bg-white/10 transition">Cancel</button>
-          <button 
-            type="button" 
+          <button
+            type="button"
+            onClick={confirmNewWorkout.close}
+            className="flex-1 py-2.5 rounded-2xl border border-white/15 bg-white/5 text-white text-sm hover:bg-white/10 transition"
+          >
+            Cancel
+          </button>
+
+          <button
+            type="button"
             onClick={async () => {
               confirmNewWorkout.close();
               await discardActiveWorkout();
               startWorkout();
-            }} 
+            }}
             className="flex-1 py-2.5 rounded-2xl bg-red-500 text-white text-sm font-semibold hover:bg-red-400 transition"
           >
             Discard & start

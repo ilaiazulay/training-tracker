@@ -4,6 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import AuthCard from "../components/AuthCard";
 import ErrorAlert from "../components/ErrorAlert";
+import Spinner from "../components/Spinner";
 import Modal from "../components/Modal";
 import { getAuthData, clearAuthData } from "../auth";
 
@@ -70,22 +71,22 @@ export default function Workout() {
   const [completing, setCompleting] = useState(false);
 
   // ✅ NEW: drafts for typing (prevents refreshWorkout from overwriting typing)
-  const [draft, setDraft] = useState({}); // { "weId:setIndex:weight": "60.5", ... }
+  const [draft, setDraft] = useState({});
 
   // Drop set modal state
-  const [dropOpenForWE, setDropOpenForWE] = useState(null); // workoutExerciseId
+  const [dropOpenForWE, setDropOpenForWE] = useState(null);
   const [dropMain, setDropMain] = useState({ weight: "", reps: "" });
   const [dropParts, setDropParts] = useState([{ weight: "", reps: "" }]);
   const [savingDrop, setSavingDrop] = useState(false);
 
   // ✅ Switch exercise modal state
   const [switchOpen, setSwitchOpen] = useState(false);
-  const [switchForWE, setSwitchForWE] = useState(null); // workoutExercise object
+  const [switchForWE, setSwitchForWE] = useState(null);
   const [switchPool, setSwitchPool] = useState([]);
   const [switchSearch, setSwitchSearch] = useState("");
   const [switchPickId, setSwitchPickId] = useState(null);
   const [switchSaving, setSwitchSaving] = useState(false);
-  const [switchError, setSwitchError] = useState(""); // ✅ errors shown ONLY inside modal
+  const [switchError, setSwitchError] = useState("");
 
   // For add animation highlight
   const lastAddedSetIdRef = useRef(null);
@@ -239,7 +240,7 @@ export default function Workout() {
     }
   }
 
-  // ✅ NEW: draft accessors
+  // ✅ drafts accessors
   function getDraftValue(weId, setIndex, field, fallback) {
     const k = keyForSet(weId, setIndex, field);
     return draft[k] ?? String(fallback ?? "");
@@ -251,14 +252,12 @@ export default function Workout() {
   }
 
   async function commitDraft(weId, setIndex, currentSet) {
-    // Save BOTH fields together (so you don’t lose the other value)
     const wKey = keyForSet(weId, setIndex, "weight");
     const rKey = keyForSet(weId, setIndex, "reps");
 
     const wStr = draft[wKey] ?? String(currentSet.weight ?? "");
     const rStr = draft[rKey] ?? String(currentSet.reps ?? "");
 
-    // allow empty while typing -> treat empty as 0 on save
     const w = wStr === "" ? 0 : Number(wStr);
     const r = rStr === "" ? 0 : Number(rStr);
 
@@ -266,7 +265,6 @@ export default function Workout() {
 
     await updateNormalSet(weId, setIndex, w, r);
 
-    // clear drafts after success
     setDraft((d) => {
       const next = { ...d };
       delete next[wKey];
@@ -418,7 +416,7 @@ export default function Workout() {
     }
   }
 
-  // ✅ Load switch pool (all exercises) once when switch modal is opened
+  // ✅ Load switch pool once when switch modal opens
   useEffect(() => {
     if (!switchOpen || !accessToken) return;
 
@@ -485,17 +483,14 @@ export default function Workout() {
       setSwitchError("");
       setSwitchSaving(true);
 
-      const res = await fetch(
-        `${API_BASE_URL}/workouts/exercises/${switchForWE.id}/switch`,
-        {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${accessToken}`,
-          },
-          body: JSON.stringify({ newExerciseId: switchPickId }),
-        }
-      );
+      const res = await fetch(`${API_BASE_URL}/workouts/exercises/${switchForWE.id}/switch`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ newExerciseId: switchPickId }),
+      });
 
       const data = await res.json().catch(() => ({}));
 
@@ -517,7 +512,6 @@ export default function Workout() {
 
   return (
     <>
-      {/* Logout top-right */}
       <button
         type="button"
         onClick={logout}
@@ -527,15 +521,19 @@ export default function Workout() {
       </button>
 
       <AuthCard title={workoutLabel} onBack={() => nav("/home")}>
-        <div className="space-y-4">
+        <div className="flex flex-col min-h-[420px]">
           <ErrorAlert message={error} />
 
           {loading ? (
-            <div className="text-center text-slate-300 text-sm">Loading...</div>
+            <div className="flex flex-1 items-center justify-center">
+              <Spinner size="lg" label="Loading workout..." />
+            </div>
           ) : !workout ? (
-            <div className="text-center text-slate-300 text-sm">Workout not found</div>
+            <div className="flex flex-1 items-center justify-center">
+              <div className="text-center text-slate-300 text-sm">Workout not found</div>
+            </div>
           ) : (
-            <>
+            <div className="space-y-4">
               {/* Subheader */}
               <div className="flex items-center justify-between rounded-2xl border border-white/15 bg-white/5 px-4 py-3">
                 <div className="text-xs text-slate-400">
@@ -550,17 +548,13 @@ export default function Workout() {
                 </div>
               </div>
 
-              {/* Exercise cards */}
               {exercises.map((we) => {
                 const stats = getStatsForExercise(we.exerciseId);
                 const lastText = formatStat(stats?.last);
                 const prText = formatStat(stats?.pr);
 
-                const plannedName =
-                  we?.plannedExercise?.name || we?.exercise?.name || "";
-
-                const performedName =
-                  we?.exercise?.name || "";
+                const plannedName = we?.plannedExercise?.name || we?.exercise?.name || "";
+                const performedName = we?.exercise?.name || "";
 
                 const isSwitched =
                   !!we.isSubstitution &&
@@ -568,9 +562,11 @@ export default function Workout() {
                   we.exerciseId !== we.plannedExerciseId;
 
                 return (
-                  <div key={we.id} className="rounded-2xl border border-white/15 bg-white/5 p-4 space-y-3">
+                  <div
+                    key={we.id}
+                    className="rounded-2xl border border-white/15 bg-white/5 p-4 space-y-3"
+                  >
                     <div className="flex items-start gap-4">
-                      {/* Image */}
                       <div className="w-16 h-16 rounded-xl overflow-hidden bg-black/20 flex-shrink-0 border border-white/10">
                         {we.exercise?.imageUrl ? (
                           <img
@@ -586,11 +582,9 @@ export default function Workout() {
                         )}
                       </div>
 
-                      {/* Name + stats */}
                       <div className="flex-1">
                         <div className="flex items-center gap-2">
                           <div className="text-white font-semibold">{performedName}</div>
-
                           {isSwitched ? (
                             <span className="px-2 py-0.5 rounded-full text-[10px] border border-amber-300/30 bg-amber-400/10 text-amber-200">
                               switched
@@ -611,7 +605,8 @@ export default function Workout() {
                         <div className="flex flex-wrap gap-2 mt-2">
                           {lastText ? (
                             <span className="px-2 py-1 rounded-full text-[11px] border border-white/10 bg-white/5 text-slate-200">
-                              Last best: <span className="font-semibold text-white">{lastText}</span>
+                              Last best:{" "}
+                              <span className="font-semibold text-white">{lastText}</span>
                             </span>
                           ) : (
                             <span className="px-2 py-1 rounded-full text-[11px] border border-white/10 bg-white/5 text-slate-400">
@@ -627,7 +622,6 @@ export default function Workout() {
                         </div>
                       </div>
 
-                      {/* Actions */}
                       <div className="flex flex-col gap-2">
                         <button
                           type="button"
@@ -655,7 +649,7 @@ export default function Workout() {
                       </div>
                     </div>
 
-                    {/* NORMAL Sets (Animated) */}
+                    {/* NORMAL sets */}
                     <div className="space-y-2">
                       <AnimatePresence initial={false} mode="popLayout">
                         {we.normalSets.map((s) => {
@@ -684,7 +678,6 @@ export default function Workout() {
                             >
                               <div className="text-xs text-slate-300 w-10">#{s.setIndex + 1}</div>
 
-                              {/* ✅ UPDATED: local typing + mobile decimal keyboard + Enter->blur */}
                               <input
                                 className="w-20 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40"
                                 type="text"
@@ -692,7 +685,10 @@ export default function Workout() {
                                 pattern="[0-9]*[.,]?[0-9]*"
                                 value={getDraftValue(we.id, s.setIndex, "weight", s.weight)}
                                 onChange={(e) => {
-                                  const v = onlyNumberLike(e.target.value, { allowDecimal: true }).replace(",", ".");
+                                  const v = onlyNumberLike(e.target.value, { allowDecimal: true }).replace(
+                                    ",",
+                                    "."
+                                  );
                                   setDraftValue(we.id, s.setIndex, "weight", v);
                                 }}
                                 onBlur={() => commitDraft(we.id, s.setIndex, s)}
@@ -702,7 +698,6 @@ export default function Workout() {
                               />
                               <div className="text-xs text-slate-400">kg</div>
 
-                              {/* ✅ UPDATED: local typing + numeric keyboard + Enter->blur */}
                               <input
                                 className="w-16 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40"
                                 type="text"
@@ -742,7 +737,10 @@ export default function Workout() {
                     {we.dropGroups.length > 0 ? (
                       <div className="space-y-3 pt-2">
                         {we.dropGroups.map((g) => (
-                          <div key={g.groupId} className="rounded-2xl border border-emerald-300/20 bg-emerald-400/10 p-3">
+                          <div
+                            key={g.groupId}
+                            className="rounded-2xl border border-emerald-300/20 bg-emerald-400/10 p-3"
+                          >
                             <div className="flex items-center justify-between mb-2">
                               <div className="text-sm font-semibold text-emerald-100">Drop set</div>
                               <button
@@ -785,7 +783,9 @@ export default function Workout() {
                                   key={p.id}
                                   className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2"
                                 >
-                                  <div className="text-[11px] text-emerald-200 w-12">Drop {idx + 1}</div>
+                                  <div className="text-[11px] text-emerald-200 w-12">
+                                    Drop {idx + 1}
+                                  </div>
                                   <input
                                     className="w-20 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40"
                                     type="number"
@@ -798,7 +798,9 @@ export default function Workout() {
                                     className="w-16 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40"
                                     type="number"
                                     value={p.reps}
-                                    onChange={(e) => updateAnySetById(p.id, p.weight, e.target.value)}
+                                    onChange={(e) =>
+                                      updateAnySetById(p.id, p.weight, e.target.value)
+                                    }
                                   />
                                   <div className="text-xs text-slate-200">reps</div>
                                 </div>
@@ -820,11 +822,11 @@ export default function Workout() {
               >
                 {completing ? "Completing..." : "Finish workout"}
               </button>
-            </>
+            </div>
           )}
         </div>
 
-        {/* ✅ Drop set modal */}
+        {/* Drop set modal */}
         <Modal
           open={!!dropOpenForWE}
           title="Add drop set"
@@ -936,7 +938,7 @@ export default function Workout() {
           </div>
         </Modal>
 
-        {/* ✅ Switch exercise modal (errors shown ONLY here) */}
+        {/* Switch modal */}
         <Modal
           open={switchOpen}
           title="Switch exercise"
@@ -964,9 +966,7 @@ export default function Workout() {
 
             <div className="max-h-60 overflow-auto space-y-2 pr-1">
               {switchCandidates.length === 0 ? (
-                <div className="text-[12px] text-slate-400 px-2 py-3">
-                  No matching exercises found.
-                </div>
+                <div className="text-[12px] text-slate-400 px-2 py-3">No matching exercises found.</div>
               ) : (
                 switchCandidates.map((ex) => {
                   const picked = switchPickId === ex.id;

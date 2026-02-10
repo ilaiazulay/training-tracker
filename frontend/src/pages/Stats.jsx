@@ -1,7 +1,9 @@
+// src/pages/Stats.jsx
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import AuthCard from "../components/AuthCard";
 import ErrorAlert from "../components/ErrorAlert";
+import Spinner from "../components/Spinner";
 import BottomNav from "../components/BottomNav";
 import { getAuthData, clearAuthData } from "../auth";
 
@@ -10,7 +12,6 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 export default function Stats() {
   const nav = useNavigate();
 
-  // ✅ Initialize auth immediately
   const [authData] = useState(() => getAuthData());
   const token = authData?.tokens?.accessToken;
 
@@ -59,9 +60,8 @@ export default function Stats() {
   if (!authData) return null;
 
   return (
-    <AuthCard 
+    <AuthCard
       title="Stats"
-      // ✅ Logout button goes here now
       topRight={
         <button
           type="button"
@@ -71,7 +71,6 @@ export default function Stats() {
           Logout
         </button>
       }
-      // ✅ Navbar goes here -> Fixed at bottom
       bottom={
         <BottomNav
           active="stats"
@@ -81,16 +80,19 @@ export default function Stats() {
         />
       }
     >
-      <div className="space-y-4">
+      <div className="flex flex-col min-h-[420px]">
         <ErrorAlert message={error} />
 
         {loading ? (
-          <div className="text-center text-slate-300 text-sm mt-10">Loading stats…</div>
+          <div className="flex flex-1 items-center justify-center">
+            <Spinner size="lg" label="Loading stats..." />
+          </div>
         ) : !stats ? (
-          <div className="text-center text-slate-300 text-sm mt-10">No stats yet</div>
+          <div className="flex flex-1 items-center justify-center">
+            <div className="text-center text-slate-300 text-sm">No stats yet</div>
+          </div>
         ) : (
           <div className="space-y-4">
-            {/* Overview */}
             <div className="rounded-2xl border border-white/15 bg-white/5 p-4">
               <div className="text-white font-semibold mb-2">Overview</div>
               <div className="grid grid-cols-2 gap-3 text-sm">
@@ -101,7 +103,6 @@ export default function Stats() {
               </div>
             </div>
 
-            {/* PRs */}
             <div className="rounded-2xl border border-emerald-300/20 bg-emerald-400/10 p-4">
               <div className="text-emerald-100 font-semibold mb-2">Personal Records</div>
               {!stats.prs?.length ? (
@@ -123,7 +124,6 @@ export default function Stats() {
               )}
             </div>
 
-            {/* Recent workouts */}
             <div className="rounded-2xl border border-white/15 bg-white/5 p-4">
               <div className="text-white font-semibold mb-2">Recent workouts</div>
               {!stats.recentWorkouts?.length ? (

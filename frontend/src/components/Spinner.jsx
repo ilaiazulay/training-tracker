@@ -1,27 +1,24 @@
+// src/components/Spinner.jsx
 import React from "react";
 
-export default function Spinner({
-  label = "Loading...",
-  size = "md", // "sm" | "md" | "lg"
-  center = true,
-}) {
-  const box =
-    size === "sm" ? "h-4 w-4" : size === "lg" ? "h-7 w-7" : "h-5 w-5";
+const SIZE_MAP = {
+  sm: "h-4 w-4 border-2",
+  md: "h-6 w-6 border-2",
+  lg: "h-10 w-10 border-4",
+};
 
-  const text =
-    size === "sm" ? "text-xs" : size === "lg" ? "text-base" : "text-sm";
+export default function Spinner({ label, size = "md", className = "" }) {
+  const sizeClass = SIZE_MAP[size] || SIZE_MAP.md;
 
   return (
-    <div className={[center ? "flex justify-center" : "", "w-full"].join(" ")}>
-      <div className="inline-flex items-center gap-2 rounded-2xl border border-white/15 bg-white/5 px-3 py-2">
-        <span
-          className={[
-            box,
-            "rounded-full border-2 border-slate-300 border-t-transparent animate-spin",
-          ].join(" ")}
-        />
-        {label ? <span className={["text-slate-200", text].join(" ")}>{label}</span> : null}
-      </div>
+    <div className={["flex flex-col items-center gap-3", className].join(" ")}>
+      <div
+        className={[
+          "rounded-full border-white/20 border-t-white animate-spin",
+          sizeClass,
+        ].join(" ")}
+      />
+      {label ? <div className="text-sm text-slate-300">{label}</div> : null}
     </div>
   );
 }

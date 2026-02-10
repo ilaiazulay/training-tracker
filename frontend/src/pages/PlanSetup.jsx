@@ -1,7 +1,9 @@
+// src/pages/PlanSetup.jsx
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import AuthCard from "../components/AuthCard";
 import ErrorAlert from "../components/ErrorAlert";
+import Spinner from "../components/Spinner";
 import { getAuthData, saveAuthData } from "../auth";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
@@ -19,7 +21,6 @@ function PlanSetup() {
       return;
     }
 
-    // If user already has plan, skip
     if (authData.user.hasConfiguredPlan) {
       navigate("/home");
     }
@@ -49,7 +50,6 @@ function PlanSetup() {
 
       const data = await res.json();
 
-      // Update user in local storage with hasConfiguredPlan = true
       const newAuthData = {
         ...authData,
         user: {
@@ -69,43 +69,48 @@ function PlanSetup() {
   };
 
   const handleBuildCustom = () => {
-    // later: navigate to a custom builder page
-    // for now, we can just alert or navigate to a placeholder
-    navigate("/plan-builder"); // you'll create this later
+    navigate("/plan-builder");
   };
 
   return (
     <AuthCard title="Choose your training plan">
-      <div className="space-y-4">
+      <div className="flex flex-col min-h-[420px]">
         <ErrorAlert message={error} />
 
-        <p className="text-xs text-slate-300 text-center">
-          Split chosen:{" "}
-          <span className="font-semibold">
-            {authData.user.planType.replace("_", " ")}
-          </span>
-        </p>
+        {loadingDefault ? (
+          <div className="flex flex-1 items-center justify-center">
+            <Spinner size="lg" label="Creating your plan..." />
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <p className="text-xs text-slate-300 text-center">
+              Split chosen:{" "}
+              <span className="font-semibold">{authData.user.planType.replace("_", " ")}</span>
+            </p>
 
-        <div className="space-y-3 mt-2">
-          <button
-            onClick={handleUseDefault}
-            disabled={loadingDefault}
-            className="w-full bg-emerald-400 text-slate-900 font-medium py-2.5 rounded-xl text-sm hover:bg-emerald-300 active:scale-[0.99] transition disabled:opacity-60"
-          >
-            {loadingDefault ? "Creating plan..." : "Use recommended plan"}
-          </button>
+            <div className="space-y-3 mt-2">
+              <button
+                onClick={handleUseDefault}
+                disabled={loadingDefault}
+                className="w-full bg-emerald-400 text-slate-900 font-medium py-2.5 rounded-xl text-sm hover:bg-emerald-300 active:scale-[0.99] transition disabled:opacity-60"
+              >
+                Use recommended plan
+              </button>
 
-          <button
-            onClick={handleBuildCustom}
-            className="w-full bg-white/5 text-slate-100 font-medium py-2.5 rounded-xl text-sm border border-white/20 hover:bg-white/10 active:scale-[0.99] transition"
-          >
-            Build my own (advanced)
-          </button>
-        </div>
+              <button
+                onClick={handleBuildCustom}
+                disabled={loadingDefault}
+                className="w-full bg-white/5 text-slate-100 font-medium py-2.5 rounded-xl text-sm border border-white/20 hover:bg-white/10 active:scale-[0.99] transition disabled:opacity-60"
+              >
+                Build my own (advanced)
+              </button>
+            </div>
 
-        <p className="text-[11px] text-slate-400 mt-3 text-center">
-          You can always edit your plan later from Settings.
-        </p>
+            <p className="text-[11px] text-slate-400 mt-3 text-center">
+              You can always edit your plan later from Settings.
+            </p>
+          </div>
+        )}
       </div>
     </AuthCard>
   );
