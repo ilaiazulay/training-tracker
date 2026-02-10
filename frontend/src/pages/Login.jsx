@@ -1,8 +1,10 @@
+// src/pages/Login.jsx
 import { Link, useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { GoogleLogin } from "@react-oauth/google";
 import AuthCard from "../components/AuthCard";
 import ErrorAlert from "../components/ErrorAlert";
+import Spinner from "../components/Spinner";
 import { saveAuthData } from "../auth";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
@@ -15,40 +17,39 @@ function Login() {
 
   const navigate = useNavigate();
 
+  async function finishLogin(data) {
+    saveAuthData(data);
+    const user = data.user;
+
+    if (!user?.hasCompletedOnboarding) {
+      navigate("/onboarding");
+    } else {
+      navigate("/home");
+    }
+  }
+
   // ----- GOOGLE LOGIN -----
   const handleGoogleSuccess = async (credentialResponse) => {
     try {
       setError("");
       setLoading(true);
 
-      const idToken = credentialResponse.credential;
+      const idToken = credentialResponse?.credential;
+      if (!idToken) throw new Error("Google login failed (missing token).");
 
       const res = await fetch(`${API_BASE_URL}/auth/google`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ idToken }), // no planType here for login
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ idToken }),
       });
 
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.message || "Google login failed");
-      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || "Google login failed");
 
-      const data = await res.json();
-
-      // Save user + tokens
-      saveAuthData(data);
-      const user = data.user;
-      if (!user.hasCompletedOnboarding) {
-        navigate("/onboarding");
-      } else {
-        navigate("/home");
-      }      
+      await finishLogin(data);
     } catch (err) {
       console.error(err);
-      setError(err.message || "Google login failed");
+      setError(err?.message || "Google login failed");
     } finally {
       setLoading(false);
     }
@@ -67,9 +68,7 @@ function Login() {
       setLoading(true);
 
       if (!email || !password) {
-        setError("Please fill email and password.");
-        setLoading(false);
-        return;
+        throw new Error("Please fill email and password.");
       }
 
       const res = await fetch(`${API_BASE_URL}/auth/login`, {
@@ -78,22 +77,13 @@ function Login() {
         body: JSON.stringify({ email, password }),
       });
 
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.message || "Login failed");
-      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || "Login failed");
 
-      const data = await res.json();
-      saveAuthData(data);
-      const user = data.user;
-      if (!user.hasCompletedOnboarding) {
-        navigate("/onboarding");
-      } else {
-        navigate("/home");
-      }      
+      await finishLogin(data);
     } catch (err) {
       console.error(err);
-      setError(err.message || "Login failed");
+      setError(err?.message || "Login failed");
     } finally {
       setLoading(false);
     }
@@ -102,16 +92,21 @@ function Login() {
   return (
     <AuthCard title="Welcome back">
       <div className="space-y-4">
-        {/* Google login */}
-        <div className="flex justify-center">
-          <GoogleLogin
-            onSuccess={handleGoogleSuccess}
-            onError={handleGoogleError}
-            shape="pill"
-            theme="outline"
-            size="large"
-            width="260"
-          />
+        {/* Google login (keep visible, disable while loading) */}
+        <div className="flex flex-col items-center gap-3">
+          <div className={loading ? "opacity-60 pointer-events-none" : ""}>
+            <GoogleLogin
+              onSuccess={handleGoogleSuccess}
+              onError={handleGoogleError}
+              shape="pill"
+              theme="outline"
+              size="large"
+              width="260"
+            />
+          </div>
+
+          {/* Spinner shown while loading */}
+          {loading ? <Spinner label="Signing in..." /> : null}
         </div>
 
         {/* Divider */}
@@ -134,6 +129,9 @@ function Login() {
             placeholder="Email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            autoComplete="email"
+            inputMode="email"
+            disabled={loading}
           />
 
           <input
@@ -142,6 +140,8 @@ function Login() {
             placeholder="Password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+            disabled={loading}
           />
 
           <button
@@ -149,15 +149,27 @@ function Login() {
             disabled={loading}
             className="w-full bg-white text-slate-900 font-medium py-2.5 rounded-xl text-sm mt-2 hover:bg-slate-100 active:scale-[0.99] transition disabled:opacity-60"
           >
-            {loading ? "Logging in..." : "Log in"}
+            {loading ? (
+              <span className="inline-flex items-center justify-center gap-2">
+                <span className="h-4 w-4 rounded-full border-2 border-slate-900/40 border-t-transparent animate-spin" />
+                Logging in...
+              </span>
+            ) : (
+              "Log in"
+            )}
           </button>
         </form>
 
+        {/* Disable Sign up while loading */}
         <p className="text-center text-xs text-slate-400 mt-3">
           Don't have an account?{" "}
-          <Link to="/signup" className="text-slate-100 underline">
-            Sign up
-          </Link>
+          {loading ? (
+            <span className="text-slate-500">Sign up</span>
+          ) : (
+            <Link to="/signup" className="text-slate-100 underline">
+              Sign up
+            </Link>
+          )}
         </p>
       </div>
     </AuthCard>
