@@ -21,18 +21,7 @@ function workoutLabel(k) {
   return `Workout ${k}`;
 }
 
-function startOfToday() {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
-function isFromToday(workout) {
-  const t = workout?.createdAt || workout?.date;
-  if (!t) return true;
-  return new Date(t) >= startOfToday();
-}
-
+// Helper to calculate minutes since creation
 function minutesSince(isoOrDate) {
   if (!isoOrDate) return null;
   const created = new Date(isoOrDate).getTime();
@@ -57,6 +46,7 @@ export default function Home() {
 
   const confirmNewWorkout = useModal();
 
+  // Timer to update "X minutes ago"
   const [minuteTick, setMinuteTick] = useState(0);
   useEffect(() => {
     const t = setInterval(() => setMinuteTick((x) => x + 1), 60000);
@@ -112,6 +102,7 @@ export default function Home() {
   const activeWorkout = today?.activeWorkout || null;
   const activeWorkoutId = activeWorkout?.id || null;
 
+  // Fetch full details of the active workout so we can pass it to the next screen
   useEffect(() => {
     if (!token || !activeWorkoutId) {
       setActiveWorkoutFull(null);
@@ -140,9 +131,11 @@ export default function Home() {
     };
   }, [token, activeWorkoutId]);
 
-  const hasActiveToday = !!activeWorkoutId && isFromToday(activeWorkout);
+  // ✅ CHANGED: Removed "isFromToday" check.
+  // Any active workout (status=PLANNED) counts as "Active" now.
+  const hasActiveSession = !!activeWorkoutId;
   const hasActiveForSelected =
-    hasActiveToday && activeWorkout?.planDay === selectedWorkout;
+    hasActiveSession && activeWorkout?.planDay === selectedWorkout;
 
   const progress = useMemo(() => {
     if (!activeWorkoutFull?.exercises?.length) return null;
@@ -169,7 +162,12 @@ export default function Home() {
   }, [activeWorkout?.createdAt, activeWorkout?.date, minuteTick]);
 
   async function onContinue() {
-    if (activeWorkoutId) nav(`/workout/${activeWorkoutId}`);
+    if (activeWorkoutId) {
+      // ✅ CHANGED: Pass 'activeWorkoutFull' in state for Instant Load
+      nav(`/workout/${activeWorkoutId}`, {
+        state: { initialWorkout: activeWorkoutFull },
+      });
+    }
   }
 
   async function discardActiveWorkout() {
@@ -184,10 +182,10 @@ export default function Home() {
   async function onNewWorkout() {
     if (!today) return;
 
-    if (hasActiveToday) {
+    if (hasActiveSession) {
       confirmNewWorkout.show({
         title: "Workout in progress",
-        description: `You already have a workout in progress today (${workoutLabel(
+        description: `You already have a workout in progress (${workoutLabel(
           activeWorkout.planDay
         )}). Starting a new workout will discard it.`,
       });
@@ -213,15 +211,22 @@ export default function Home() {
 
       const data = await res.json().catch(() => ({}));
 
+      // ✅ CHANGED: If backend returns 409 (resume), pass data to nav
       if (res.status === 409 && data.workout?.id) {
-        nav(`/workout/${data.workout.id}`);
+        nav(`/workout/${data.workout.id}`, {
+          state: { initialWorkout: data.workout },
+        });
         return;
       }
 
       if (!res.ok) throw new Error(data.message || "Failed to start workout");
 
       await loadHome();
-      nav(`/workout/${data.workout.id}`);
+      
+      // ✅ CHANGED: Pass new workout data to nav
+      nav(`/workout/${data.workout.id}`, {
+        state: { initialWorkout: data.workout },
+      });
     } catch (e) {
       setError(e.message);
     } finally {
@@ -252,10 +257,6 @@ export default function Home() {
         />
       }
     >
-      {/* IMPORTANT:
-          We want loading spinner to be centered INSIDE the card content area.
-          So we keep a flex container with min height.
-      */}
       <div className="flex flex-col min-h-[420px]">
         <ErrorAlert message={error} />
 
