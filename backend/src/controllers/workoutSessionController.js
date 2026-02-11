@@ -1,16 +1,6 @@
 // src/controllers/workoutSessionController.js
 const prisma = require("../prisma");
 
-/**
- * A simple score that works for "best set" comparisons:
- * Epley-ish estimator: weight * (1 + reps/30)
- */
-function setScore(weight, reps) {
-  const w = Number(weight) || 0;
-  const r = Number(reps) || 0;
-  return w * (1 + r / 30);
-}
-
 function clampInt(x, { min, max }) {
   const n = Number(x);
   if (!Number.isFinite(n)) return null;
@@ -26,24 +16,58 @@ function clampFloat(x, { min, max }) {
   return n;
 }
 
-function formatBestCandidate(candidate) {
-  // candidate can be:
-  // { kind: "NORMAL", weight, reps }
-  // { kind: "DROPSET", main: {weight,reps}, drops:[...], bestPart:{weight,reps} }
-  return candidate || null;
+// Helper: Formats the best set for the frontend
+// Can handle a single normal set OR a drop set group
+function formatBestSet(bestSet, groupSets = []) {
+  if (!bestSet) return null;
+
+  // If it's a Normal set (or drop set part but we treat it as single best effort)
+  if (!bestSet.dropGroupId) {
+    return { kind: "NORMAL", weight: bestSet.weight, reps: bestSet.reps };
+  }
+
+  // If it's part of a drop set, we reconstruct the group
+  // We use the passed 'groupSets' which we fetch only if needed
+  if (groupSets.length > 0) {
+    const sorted = [...groupSets].sort((a, b) => a.setIndex - b.setIndex);
+    const mainSet = sorted.find((x) => x.kind === "DROP_MAIN") || sorted[0];
+    const drops = sorted
+      .filter((x) => x.kind === "DROP_PART")
+      .map((x) => ({ weight: x.weight, reps: x.reps }));
+    
+    // Determine the "best part" inside this group (highest weight/reps)
+    let bestPart = null;
+    let bestVal = -1;
+    for(const s of sorted) {
+        // Simple comparison: weight * 1000 + reps (approx score)
+        const val = s.weight * 1000 + s.reps;
+        if(val > bestVal) {
+            bestVal = val;
+            bestPart = { weight: s.weight, reps: s.reps };
+        }
+    }
+
+    return {
+      kind: "DROPSET",
+      main: mainSet ? { weight: mainSet.weight, reps: mainSet.reps } : null,
+      drops,
+      bestPart,
+      dropGroupId: bestSet.dropGroupId,
+    };
+  }
+
+  // Fallback if we didn't fetch group sets
+  return { kind: "NORMAL", weight: bestSet.weight, reps: bestSet.reps };
 }
 
+// ✅ NEW: Optimized Stats Calculation
+// Runs queries in parallel and uses DB sorting instead of JS filtering
 async function computeStatsForWorkout(userId, workoutId) {
-  // For each exercise in THIS workout:
-  // - pr: best ever (completed workouts)
-  // - last: best from most recent completed workout that includes this exercise (not including current planned)
   const workout = await prisma.workout.findFirst({
     where: { id: workoutId, userId },
     include: {
       exercises: {
-        include: {
-          exercise: true,
-        },
+        include: { exercise: true }, // we need exerciseId
         orderBy: { orderIndex: "asc" },
       },
     },
@@ -54,139 +78,73 @@ async function computeStatsForWorkout(userId, workoutId) {
   const exerciseIds = workout.exercises.map((we) => we.exerciseId);
   const statsByExerciseId = {};
 
-  // Helper: find best candidate from a list of sets grouped by dropGroupId
-  function bestFromSets(sets) {
-    // Group drop sets
-    const dropsByGroup = new Map();
-    const normalSets = [];
-
-    for (const s of sets) {
-      if (s.kind === "NORMAL" || !s.dropGroupId) {
-        normalSets.push(s);
-      } else {
-        if (!dropsByGroup.has(s.dropGroupId)) dropsByGroup.set(s.dropGroupId, []);
-        dropsByGroup.get(s.dropGroupId).push(s);
-      }
-    }
-
-    let best = null;
-    let bestScore = -Infinity;
-
-    // normal candidates
-    for (const s of normalSets) {
-      const sc = setScore(s.weight, s.reps);
-      if (sc > bestScore) {
-        bestScore = sc;
-        best = { kind: "NORMAL", weight: s.weight, reps: s.reps };
-      }
-    }
-
-    // drop candidates (best part inside group, but return full chain)
-    for (const [groupId, items] of dropsByGroup.entries()) {
-      const sorted = [...items].sort((a, b) => a.setIndex - b.setIndex);
-      let bestPart = null;
-      let bestPartScore = -Infinity;
-
-      for (const s of sorted) {
-        const sc = setScore(s.weight, s.reps);
-        if (sc > bestPartScore) {
-          bestPartScore = sc;
-          bestPart = { weight: s.weight, reps: s.reps };
-        }
-      }
-
-      // main is the DROP_MAIN if exists, else first
-      const mainSet =
-        sorted.find((x) => x.kind === "DROP_MAIN") || sorted[0] || null;
-
-      const drops = sorted
-        .filter((x) => x.kind === "DROP_PART")
-        .map((x) => ({ weight: x.weight, reps: x.reps }));
-
-      const groupCandidate = {
-        kind: "DROPSET",
-        main: mainSet ? { weight: mainSet.weight, reps: mainSet.reps } : null,
-        drops,
-        bestPart,
-        dropGroupId: groupId,
-      };
-
-      if (bestPartScore > bestScore) {
-        bestScore = bestPartScore;
-        best = groupCandidate;
-      }
-    }
-
-    return best ? formatBestCandidate(best) : null;
-  }
-
-  // PR: best ever across ALL completed workouts
-  // LAST: best from most recent completed workout that contains that exercise
-  for (const exId of exerciseIds) {
-    // PR
-    const allCompletedSets = await prisma.set.findMany({
-      where: {
-        workoutExercise: {
-          workout: { userId, status: "COMPLETED" },
-          exerciseId: exId,
-        },
-      },
-      select: {
-        id: true,
-        kind: true,
-        weight: true,
-        reps: true,
-        dropGroupId: true,
-        setIndex: true,
-      },
-    });
-
-    const prBest = bestFromSets(allCompletedSets);
-
-    // LAST completed workout that includes exercise
-    const lastWorkout = await prisma.workout.findFirst({
-      where: {
-        userId,
-        status: "COMPLETED",
-        exercises: { some: { exerciseId: exId } },
-      },
-      orderBy: { date: "desc" },
-      select: { id: true },
-    });
-
-    let lastBest = null;
-    if (lastWorkout) {
-      const lastSets = await prisma.set.findMany({
+  // Run all exercise queries in PARALLEL (massive speedup)
+  await Promise.all(
+    exerciseIds.map(async (exId) => {
+      // 1. GET PR (Best Set Ever)
+      // Instead of fetching ALL history, we just ask DB for the single heaviest set.
+      const prSet = await prisma.set.findFirst({
         where: {
           workoutExercise: {
-            workoutId: lastWorkout.id,
             exerciseId: exId,
+            workout: { userId, status: "COMPLETED" },
           },
         },
-        select: {
-          id: true,
-          kind: true,
-          weight: true,
-          reps: true,
-          dropGroupId: true,
-          setIndex: true,
-        },
+        orderBy: [
+          { weight: "desc" }, // Heaviest first
+          { reps: "desc" },   // Then most reps
+        ],
       });
 
-      lastBest = bestFromSets(lastSets);
-    }
+      let prFormatted = null;
+      if (prSet) {
+        // If the PR was a drop set, fetch its siblings to display nicely
+        let groupSets = [];
+        if (prSet.dropGroupId) {
+          groupSets = await prisma.set.findMany({
+            where: { dropGroupId: prSet.dropGroupId },
+          });
+        }
+        prFormatted = formatBestSet(prSet, groupSets);
+      }
 
-    statsByExerciseId[String(exId)] = {
-      pr: prBest,
-      last: lastBest,
-    };
-  }
+      // 2. GET LAST (Most recent performance)
+      // We look for the last WorkoutExercise directly (includes sets)
+      const lastWe = await prisma.workoutExercise.findFirst({
+        where: {
+          exerciseId: exId,
+          workout: { userId, status: "COMPLETED" },
+        },
+        orderBy: { workout: { date: "desc" } },
+        include: { sets: true },
+      });
+
+      let lastFormatted = null;
+      if (lastWe && lastWe.sets.length > 0) {
+        // Find best set within that specific session
+        // Simple logic: sort by weight desc
+        const sorted = [...lastWe.sets].sort((a, b) => b.weight - a.weight || b.reps - a.reps);
+        const bestInSession = sorted[0];
+
+        // If it was a drop set, we have all sets in 'lastWe.sets' already
+        const groupSets = bestInSession.dropGroupId
+          ? lastWe.sets.filter((s) => s.dropGroupId === bestInSession.dropGroupId)
+          : [];
+        
+        lastFormatted = formatBestSet(bestInSession, groupSets);
+      }
+
+      statsByExerciseId[String(exId)] = {
+        pr: prFormatted,
+        last: lastFormatted,
+      };
+    })
+  );
 
   return statsByExerciseId;
 }
 
 // GET /workouts/:id
-// Returns workout + exercises + sets + statsByExerciseId
 async function getWorkoutById(req, res) {
   try {
     const userId = req.user.id;
@@ -201,8 +159,8 @@ async function getWorkoutById(req, res) {
       include: {
         exercises: {
           include: {
-            exercise: true,          // performed
-            plannedExercise: true,   // planned
+            exercise: true,          
+            plannedExercise: true,   
             sets: true,
           },
           orderBy: { orderIndex: "asc" },
@@ -212,7 +170,7 @@ async function getWorkoutById(req, res) {
 
     if (!workout) return res.status(404).json({ message: "Workout not found" });
 
-    // Create WorkoutExercise rows if missing (from plan)
+    // Handle first-time load (copy from plan if needed)
     if (workout.exercises.length === 0) {
       const trainingDay = await prisma.userTrainingDay.findFirst({
         where: { userId, dayKey: workout.planDay },
@@ -233,27 +191,22 @@ async function getWorkoutById(req, res) {
       await prisma.workoutExercise.createMany({
         data: trainingDay.exercises.map((row) => ({
           workoutId: workout.id,
-
-          // performed exercise (starts as planned)
           exerciseId: row.exerciseId,
-
-          // planned exercise (never changes)
           plannedExerciseId: row.exerciseId,
-
           isSubstitution: false,
-
           orderIndex: row.orderIndex,
           targetSets: 0,
         })),
       });
 
+      // Refetch to get the created rows
       const updatedWorkout = await prisma.workout.findFirst({
         where: { id: workoutId, userId },
         include: {
           exercises: {
             include: {
-              exercise: true,          // performed
-              plannedExercise: true,   // planned  ✅ ADD THIS
+              exercise: true,
+              plannedExercise: true,
               sets: true,
             },
             orderBy: { orderIndex: "asc" },
@@ -274,8 +227,7 @@ async function getWorkoutById(req, res) {
 }
 
 // POST /workouts/:id/sets
-// Upsert ONLY NORMAL sets by (workoutExerciseId + setIndex)
-// Body: { workoutExerciseId, setIndex, weight, reps }
+// Upsert NORMAL sets
 async function upsertNormalSet(req, res) {
   try {
     const userId = req.user.id;
@@ -296,7 +248,7 @@ async function upsertNormalSet(req, res) {
       return res.status(400).json({ message: "Invalid set payload" });
     }
 
-    // Make sure workout belongs to user and workoutExercise belongs to workout
+    // Check workout active
     const workout = await prisma.workout.findFirst({
       where: { id: workoutId, userId },
       select: { id: true, status: true },
@@ -307,6 +259,7 @@ async function upsertNormalSet(req, res) {
       return res.status(400).json({ message: "Workout is already completed" });
     }
 
+    // Check workoutExercise exists
     const we = await prisma.workoutExercise.findFirst({
       where: { id: weId, workoutId },
       select: { id: true },
@@ -314,7 +267,7 @@ async function upsertNormalSet(req, res) {
 
     if (!we) return res.status(404).json({ message: "Workout exercise not found" });
 
-    // Find existing NORMAL set for this (weId, idx)
+    // Upsert
     const existing = await prisma.set.findFirst({
       where: {
         workoutExerciseId: weId,
@@ -324,13 +277,14 @@ async function upsertNormalSet(req, res) {
       select: { id: true },
     });
 
+    let savedSet;
     if (existing) {
-      await prisma.set.update({
+      savedSet = await prisma.set.update({
         where: { id: existing.id },
         data: { weight: w, reps: r },
       });
     } else {
-      await prisma.set.create({
+      savedSet = await prisma.set.create({
         data: {
           workoutExerciseId: weId,
           setIndex: idx,
@@ -341,7 +295,8 @@ async function upsertNormalSet(req, res) {
       });
     }
 
-    return res.json({ ok: true });
+    // ✅ CHANGED: Return the set so frontend can update optimistic ID
+    return res.json({ set: savedSet });
   } catch (err) {
     console.error("upsertNormalSet error:", err);
     return res.status(500).json({ message: "Failed to save set" });
@@ -349,7 +304,6 @@ async function upsertNormalSet(req, res) {
 }
 
 // PATCH /workouts/:id/sets/:setId
-// Update any set by id (NORMAL or DROP parts)
 async function updateSetById(req, res) {
   try {
     const userId = req.user.id;
@@ -368,7 +322,6 @@ async function updateSetById(req, res) {
       return res.status(400).json({ message: "Invalid weight or reps" });
     }
 
-    // Verify the set belongs to this user+workout
     const setRow = await prisma.set.findFirst({
       where: {
         id: setId,
@@ -413,13 +366,11 @@ async function deleteSet(req, res) {
           workout: { userId },
         },
       },
-      select: { id: true, dropGroupId: true, kind: true },
+      select: { id: true },
     });
 
     if (!setRow) return res.status(404).json({ message: "Set not found" });
 
-    // If someone deletes DROP_MAIN or DROP_PART manually, we allow it,
-    // but ideally you delete the whole group via /dropsets/:groupId.
     await prisma.set.delete({ where: { id: setRow.id } });
 
     return res.json({ ok: true });
@@ -430,12 +381,6 @@ async function deleteSet(req, res) {
 }
 
 // POST /workouts/:id/dropsets
-// Body:
-// {
-//   workoutExerciseId,
-//   main: { weight, reps },
-//   drops: [{weight,reps}, ...]
-// }
 async function createDropSetGroup(req, res) {
   try {
     const userId = req.user.id;
@@ -467,20 +412,15 @@ async function createDropSetGroup(req, res) {
 
     const mainW = clampFloat(main?.weight, { min: 0, max: 999 });
     const mainR = clampInt(main?.reps, { min: 0, max: 200 });
-    if (mainW === null || mainR === null) {
-      return res.status(400).json({ message: "Invalid main set" });
-    }
-
+    
+    // Validate inputs
+    if (mainW === null || mainR === null) return res.status(400).json({ message: "Invalid main set" });
     const dropArr = Array.isArray(drops) ? drops : [];
-    for (const d of dropArr) {
-      const dw = clampFloat(d?.weight, { min: 0, max: 999 });
-      const dr = clampInt(d?.reps, { min: 0, max: 200 });
-      if (dw === null || dr === null) {
-        return res.status(400).json({ message: "Invalid drop set" });
-      }
+    for(const d of dropArr) {
+        if(clampFloat(d.weight, {min:0,max:999}) === null) return res.status(400).json({message: "Invalid drop weight"});
+        if(clampInt(d.reps, {min:0,max:200}) === null) return res.status(400).json({message: "Invalid drop reps"});
     }
 
-    // Choose next setIndex range:
     const lastSet = await prisma.set.findFirst({
       where: { workoutExerciseId: weId },
       orderBy: { setIndex: "desc" },
@@ -489,15 +429,12 @@ async function createDropSetGroup(req, res) {
 
     let nextIndex = lastSet ? lastSet.setIndex + 1 : 0;
 
-    // Create group
     const group = await prisma.dropSetGroup.create({
       data: { workoutExerciseId: weId },
       select: { id: true },
     });
 
-    // Create main + drops
     const data = [];
-
     data.push({
       workoutExerciseId: weId,
       setIndex: nextIndex++,
@@ -551,7 +488,6 @@ async function deleteDropSetGroup(req, res) {
 
     if (!group) return res.status(404).json({ message: "Drop set not found" });
 
-    // cascade deletes sets due to relation on Set.dropGroup -> DropSetGroup
     await prisma.dropSetGroup.delete({ where: { id: group.id } });
 
     return res.json({ ok: true });
@@ -600,6 +536,7 @@ async function completeWorkout(req, res) {
   }
 }
 
+// PATCH /workouts/exercises/:workoutExerciseId/switch
 async function switchWorkoutExercise(req, res) {
   try {
     const userId = req.user.id;
@@ -610,7 +547,6 @@ async function switchWorkoutExercise(req, res) {
       return res.status(400).json({ message: "Invalid ids" });
     }
 
-    // 1) Load workoutExercise + workout + plannedExercise
     const we = await prisma.workoutExercise.findFirst({
       where: {
         id: workoutExerciseId,
@@ -619,64 +555,31 @@ async function switchWorkoutExercise(req, res) {
       include: {
         workout: { select: { id: true, status: true } },
         plannedExercise: { select: { id: true, muscleGroup: true, name: true } },
-        exercise: { select: { id: true } },
       },
     });
 
-    if (!we) {
-      return res.status(404).json({ message: "Workout exercise not found" });
-    }
+    if (!we) return res.status(404).json({ message: "Workout exercise not found" });
+    if (we.workout.status !== "PLANNED") return res.status(400).json({ message: "Workout is already completed" });
 
-    // 2) Must be planned workout
-    if (we.workout.status !== "PLANNED") {
-      return res.status(400).json({ message: "Workout is already completed" });
-    }
-
-    // 3) Validate new exercise exists + allowed for user
     const newEx = await prisma.exercise.findFirst({
       where: {
         id: newExerciseId,
         OR: [{ isGlobal: true }, { createdByUserId: userId }],
       },
-      select: {
-        id: true,
-        name: true,
-        muscleGroup: true,
-      },
+      select: { id: true, muscleGroup: true },
     });
 
-    if (!newEx) {
-      return res.status(404).json({ message: "Exercise not found" });
-    }
+    if (!newEx) return res.status(404).json({ message: "Exercise not found" });
 
-    // 4) Muscle group must match planned
     if (newEx.muscleGroup !== we.plannedExercise.muscleGroup) {
       return res.status(400).json({
         message: `Invalid exercise. Must be ${we.plannedExercise.muscleGroup}`,
       });
     }
 
-    // 5) Optional: prevent duplicates inside same workout
-    // (This is optional but recommended)
-    const duplicate = await prisma.workoutExercise.findFirst({
-      where: {
-        workoutId: we.workoutId,
-        exerciseId: newExerciseId,
-        NOT: { id: we.id },
-      },
-      select: { id: true },
-    });
-
-    if (duplicate) {
-      return res.status(400).json({
-        message: "This exercise already exists in this workout",
-      });
-    }
-
-    // 6) Determine if substitution
+    // Determine isSubstitution
     const isSubstitution = newExerciseId !== we.plannedExerciseId;
 
-    // 7) Update
     await prisma.workoutExercise.update({
       where: { id: we.id },
       data: {
@@ -692,17 +595,198 @@ async function switchWorkoutExercise(req, res) {
   }
 }
 
+function clampInt(x, { min, max }) {
+  const n = Number(x);
+  if (!Number.isFinite(n)) return null;
+  const i = Math.trunc(n);
+  if (i < min || i > max) return null;
+  return i;
+}
+
+function clampFloat(x, { min, max }) {
+  const n = Number(x);
+  if (!Number.isFinite(n)) return null;
+  if (n < min || n > max) return null;
+  return n;
+}
+
+// ... (Keep formatBestSet helper) ...
+function formatBestSet(bestSet, groupSets = []) {
+  if (!bestSet) return null;
+  if (!bestSet.dropGroupId) {
+    return { kind: "NORMAL", weight: bestSet.weight, reps: bestSet.reps };
+  }
+  if (groupSets.length > 0) {
+    const sorted = [...groupSets].sort((a, b) => a.setIndex - b.setIndex);
+    const mainSet = sorted.find((x) => x.kind === "DROP_MAIN") || sorted[0];
+    const drops = sorted
+      .filter((x) => x.kind === "DROP_PART")
+      .map((x) => ({ weight: x.weight, reps: x.reps }));
+    let bestPart = null;
+    let bestVal = -1;
+    for(const s of sorted) {
+        const val = s.weight * 1000 + s.reps;
+        if(val > bestVal) {
+            bestVal = val;
+            bestPart = { weight: s.weight, reps: s.reps };
+        }
+    }
+    return {
+      kind: "DROPSET",
+      main: mainSet ? { weight: mainSet.weight, reps: mainSet.reps } : null,
+      drops,
+      bestPart,
+      dropGroupId: bestSet.dropGroupId,
+    };
+  }
+  return { kind: "NORMAL", weight: bestSet.weight, reps: bestSet.reps };
+}
+
+// Keep computeStatsForWorkout but REMOVE it from getWorkoutById
+async function computeStatsForWorkout(userId, workoutId) {
+  const workout = await prisma.workout.findFirst({
+    where: { id: workoutId, userId },
+    include: { exercises: { include: { exercise: true }, orderBy: { orderIndex: "asc" } } },
+  });
+  if (!workout) return {};
+
+  const exerciseIds = workout.exercises.map((we) => we.exerciseId);
+  const statsByExerciseId = {};
+
+  await Promise.all(
+    exerciseIds.map(async (exId) => {
+      // 1. PR
+      const prSet = await prisma.set.findFirst({
+        where: {
+          workoutExercise: { exerciseId: exId, workout: { userId, status: "COMPLETED" } },
+        },
+        orderBy: [{ weight: "desc" }, { reps: "desc" }],
+      });
+      let prFormatted = null;
+      if (prSet) {
+        let groupSets = [];
+        if (prSet.dropGroupId) {
+          groupSets = await prisma.set.findMany({ where: { dropGroupId: prSet.dropGroupId } });
+        }
+        prFormatted = formatBestSet(prSet, groupSets);
+      }
+
+      // 2. LAST
+      const lastWe = await prisma.workoutExercise.findFirst({
+        where: { exerciseId: exId, workout: { userId, status: "COMPLETED" } },
+        orderBy: { workout: { date: "desc" } },
+        include: { sets: true },
+      });
+      let lastFormatted = null;
+      if (lastWe && lastWe.sets.length > 0) {
+        const sorted = [...lastWe.sets].sort((a, b) => b.weight - a.weight || b.reps - a.reps);
+        const bestInSession = sorted[0];
+        const groupSets = bestInSession.dropGroupId
+          ? lastWe.sets.filter((s) => s.dropGroupId === bestInSession.dropGroupId)
+          : [];
+        lastFormatted = formatBestSet(bestInSession, groupSets);
+      }
+
+      statsByExerciseId[String(exId)] = { pr: prFormatted, last: lastFormatted };
+    })
+  );
+  return statsByExerciseId;
+}
+
+// ✅ NEW: Dedicated Endpoint for Stats
+async function getWorkoutStats(req, res) {
+  try {
+    const userId = req.user.id;
+    const workoutId = Number(req.params.id);
+    if (!Number.isInteger(workoutId)) return res.status(400).json({ message: "Invalid id" });
+
+    // Just calculate stats, nothing else
+    const stats = await computeStatsForWorkout(userId, workoutId);
+    return res.json({ stats });
+  } catch (err) {
+    console.error("getWorkoutStats error:", err);
+    return res.status(500).json({ message: "Failed to load stats" });
+  }
+}
+
+// UPDATED: Fast Workout Fetch (No Stats)
+async function getWorkoutById(req, res) {
+  try {
+    const userId = req.user.id;
+    const workoutId = Number(req.params.id);
+
+    if (!Number.isInteger(workoutId)) {
+      return res.status(400).json({ message: "Invalid workout id" });
+    }
+
+    const workout = await prisma.workout.findFirst({
+      where: { id: workoutId, userId },
+      include: {
+        exercises: {
+          include: {
+            exercise: true,          
+            plannedExercise: true,   
+            sets: true,
+          },
+          orderBy: { orderIndex: "asc" },
+        },
+      },
+    });
+
+    if (!workout) return res.status(404).json({ message: "Workout not found" });
+
+    // Handle first-time load (copy from plan)
+    if (workout.exercises.length === 0) {
+      const trainingDay = await prisma.userTrainingDay.findFirst({
+        where: { userId, dayKey: workout.planDay },
+        include: {
+          exercises: { orderBy: { orderIndex: "asc" }, include: { exercise: true } },
+        },
+      });
+
+      if (!trainingDay) return res.status(400).json({ message: `No plan found.` });
+
+      await prisma.workoutExercise.createMany({
+        data: trainingDay.exercises.map((row) => ({
+          workoutId: workout.id,
+          exerciseId: row.exerciseId,
+          plannedExerciseId: row.exerciseId,
+          isSubstitution: false,
+          orderIndex: row.orderIndex,
+          targetSets: 0,
+        })),
+      });
+
+      const updatedWorkout = await prisma.workout.findFirst({
+        where: { id: workoutId, userId },
+        include: {
+          exercises: {
+            include: { exercise: true, plannedExercise: true, sets: true },
+            orderBy: { orderIndex: "asc" },
+          },
+        },
+      });
+      
+      // Return workout WITHOUT waiting for stats
+      return res.json({ workout: { ...updatedWorkout, statsByExerciseId: {} } });
+    }
+
+    // Return workout WITHOUT waiting for stats
+    return res.json({ workout: { ...workout, statsByExerciseId: {} } });
+  } catch (err) {
+    console.error("getWorkoutById error:", err);
+    return res.status(500).json({ message: "Failed to load workout" });
+  }
+}
 
 module.exports = {
   getWorkoutById,
   completeWorkout,
-
+  getWorkoutStats,
   upsertNormalSet,
   deleteSet,
-
   createDropSetGroup,
   updateSetById,
   deleteDropSetGroup,
-
   switchWorkoutExercise,
 };

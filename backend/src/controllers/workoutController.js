@@ -1,3 +1,4 @@
+// src/controllers/workoutController.js
 const prisma = require("../prisma");
 
 function getDayKeys(planType) {
@@ -17,10 +18,6 @@ function getNextDayKey({ planType, lastDayKey }) {
   return keys[(idx + 1) % keys.length];
 }
 
-function hoursAgoDate(hours) {
-  return new Date(Date.now() - hours * 60 * 60 * 1000);
-}
-
 /**
  * GET /workout/today
  * Returns:
@@ -28,7 +25,7 @@ function hoursAgoDate(hours) {
  * - dayKeys
  * - recommendedDayKey
  * - lastCompletedDayKey
- * - activeWorkout (PLANNED and created within last 24 hours only)
+ * - activeWorkout (Latest PLANNED workout, regardless of when it was created)
  */
 async function getTodayWorkout(req, res) {
   try {
@@ -61,13 +58,11 @@ async function getTodayWorkout(req, res) {
       lastDayKey: lastCompleted?.planDay || null,
     });
 
-    const cutoff = hoursAgoDate(24);
-
+    // ✅ CHANGED: Removed "createdAt" filter. Finds ANY active workout.
     const active = await prisma.workout.findFirst({
       where: {
         userId,
         status: "PLANNED",
-        createdAt: { gte: cutoff },
       },
       orderBy: { createdAt: "desc" },
       select: { id: true, planDay: true, date: true, status: true, createdAt: true },
@@ -90,7 +85,7 @@ async function getTodayWorkout(req, res) {
  * POST /workout/start
  * Body: { dayKey?: "A"|"B"|"C"|"D"|"FULL" }
  *
- * If there is an active workout (PLANNED, created within last 24h) -> 409 and return it.
+ * If there is ANY active workout -> 409 and return it (Resume).
  * Else create new PLANNED workout.
  */
 async function startWorkout(req, res) {
@@ -111,17 +106,16 @@ async function startWorkout(req, res) {
 
     const dayKeys = getDayKeys(user.planType);
 
-    const cutoff = hoursAgoDate(24);
-
+    // ✅ CHANGED: Check for ANY active workout to prevent duplicates
     const active = await prisma.workout.findFirst({
-      where: { userId, status: "PLANNED", createdAt: { gte: cutoff } },
+      where: { userId, status: "PLANNED" },
       orderBy: { createdAt: "desc" },
       select: { id: true, planDay: true, date: true, status: true, createdAt: true },
     });
 
     if (active) {
       return res.status(409).json({
-        message: "You already have a workout in progress today",
+        message: "You already have a workout in progress",
         workout: active,
       });
     }
@@ -171,26 +165,22 @@ async function startWorkout(req, res) {
 
 /**
  * POST /workout/abandon
- * Deletes the active workout ONLY if:
- * - status=PLANNED
- * - createdAt within last 24 hours
- *
- * This matches: "workout started today in progress"
+ * Deletes the active workout (latest PLANNED).
  */
 async function abandonActiveWorkout(req, res) {
   try {
     const userId = req.user.id;
-    const cutoff = hoursAgoDate(24);
 
+    // ✅ CHANGED: Removed date filter. Finds latest PLANNED workout.
     const active = await prisma.workout.findFirst({
-      where: { userId, status: "PLANNED", createdAt: { gte: cutoff } },
+      where: { userId, status: "PLANNED" },
       orderBy: { createdAt: "desc" },
       select: { id: true },
     });
 
     if (!active) {
       return res.status(404).json({
-        message: "No workout in progress today to discard",
+        message: "No workout in progress to discard",
       });
     }
 
