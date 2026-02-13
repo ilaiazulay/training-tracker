@@ -76,7 +76,7 @@ async function getTodayWorkout(req, res) {
 
 /**
  * POST /workout/start
- * ✅ UPDATED: Populates exercises IMMEDIATELY to prevent race conditions.
+ * Fixes: Duplicates (Transaction) & Missing Images (Include Relations)
  */
 async function startWorkout(req, res) {
   try {
@@ -96,11 +96,20 @@ async function startWorkout(req, res) {
 
     const dayKeys = getDayKeys(user.planType);
 
-    // Check for active workout
+    // 1. Check for active workout (return FULL data for resume)
     const active = await prisma.workout.findFirst({
       where: { userId, status: "PLANNED" },
       orderBy: { createdAt: "desc" },
-      select: { id: true, planDay: true, date: true, status: true, createdAt: true },
+      include: {
+        exercises: {
+          include: {
+            exercise: true,
+            plannedExercise: true,
+            sets: true,
+          },
+          orderBy: { orderIndex: "asc" },
+        },
+      },
     });
 
     if (active) {
@@ -129,7 +138,7 @@ async function startWorkout(req, res) {
       });
     }
 
-    // ✅ 1. FETCH THE PLAN FIRST
+    // 2. Fetch the plan
     const trainingDay = await prisma.userTrainingDay.findFirst({
       where: { userId, dayKey: chosen },
       include: {
@@ -140,17 +149,16 @@ async function startWorkout(req, res) {
     });
 
     if (!trainingDay) {
-      return res.status(400).json({ message: `No plan found for Day ${chosen}. Please configure your plan.` });
+      return res.status(400).json({ message: `No plan found for Day ${chosen}.` });
     }
 
-    // ✅ 2. CREATE WORKOUT + EXERCISES IN ONE TRANSACTION
-    const workout = await prisma.workout.create({
+    // 3. Create Workout + Exercises in one transaction
+    const created = await prisma.workout.create({
       data: {
         userId,
         date: new Date(),
         planDay: chosen,
         status: "PLANNED",
-        // Magic happens here:
         exercises: {
           create: trainingDay.exercises.map((row) => ({
             exerciseId: row.exerciseId,
@@ -161,16 +169,25 @@ async function startWorkout(req, res) {
           })),
         },
       },
-      select: {
-        id: true,
-        planDay: true,
-        status: true,
-        date: true,
-        createdAt: true,
-      }
+      select: { id: true }, // We only need ID to refetch
     });
 
-    return res.status(201).json({ workout });
+    // 4. Force Re-Fetch to get images and relations
+    const fullWorkout = await prisma.workout.findFirst({
+      where: { id: created.id },
+      include: {
+        exercises: {
+          include: {
+            exercise: true, // This brings the image URL
+            plannedExercise: true,
+            sets: true,
+          },
+          orderBy: { orderIndex: "asc" },
+        },
+      },
+    });
+
+    return res.status(201).json({ workout: fullWorkout });
   } catch (err) {
     console.error("startWorkout error:", err);
     return res.status(500).json({ message: "Failed to start workout" });
@@ -196,13 +213,21 @@ async function abandonActiveWorkout(req, res) {
       });
     }
 
-    // Cleanup (Cascading deletes usually handle this, but manual safety here)
     await prisma.set.deleteMany({
-      where: { workoutExercise: { workoutId: active.id } },
+      where: {
+        workoutExercise: {
+          workoutId: active.id,
+        },
+      },
     });
     
+    // Also delete drop set groups
     await prisma.dropSetGroup.deleteMany({
-        where: { workoutExercise: { workoutId: active.id } },
+        where: {
+            workoutExercise: {
+                workoutId: active.id
+            }
+        }
     });
 
     await prisma.workoutExercise.deleteMany({

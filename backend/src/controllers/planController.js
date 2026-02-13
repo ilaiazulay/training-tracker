@@ -1,7 +1,32 @@
 // src/controllers/planController.js
 const prisma = require("../prisma");
 
-// Simple default templates per split
+// ✅ UPDATED: Map with images
+const EXERCISE_DATA = {
+  "Chest Press Machine": { muscleGroup: "CHEST", imageUrl: "/exercises/ChestPressMachine.jpg" },
+  "Dumbbell Fly": { muscleGroup: "CHEST", imageUrl: "/exercises/DumbbellFly.jpg" },
+  "Incline Chest Press Machine": { muscleGroup: "CHEST", imageUrl: "/exercises/InclineChestPressMachine.jpg" },
+  "Side Lateral Raises": { muscleGroup: "SHOULDERS", imageUrl: "/exercises/SideLateralRaises.jpg" },
+  "Dumbbell Rear Delt Fly": { muscleGroup: "SHOULDERS", imageUrl: "/exercises/DumbbellRearDeltFly.jpg" },
+  "Triceps Pushdown Machine": { muscleGroup: "TRICEPS", imageUrl: "/exercises/TricepsPushdownMachine.jpg" },
+  "Triceps Extension": { muscleGroup: "TRICEPS", imageUrl: "/exercises/TricepsExtension.jpg" },
+  "Dumbbell Overhead Triceps Extension": { muscleGroup: "TRICEPS", imageUrl: "/exercises/DumbbellOverheadTricepsExtension.jpg" },
+  "Lat Pulldown": { muscleGroup: "BACK", imageUrl: "/exercises/LatPulldown.jpg" },
+  "Machine Lat Pulldown": { muscleGroup: "BACK", imageUrl: "/exercises/MachineLatPulldown.jpg" },
+  "Machine Row": { muscleGroup: "BACK", imageUrl: "/exercises/MachineRow.jpg" },
+  "Barbell Curl": { muscleGroup: "BICEPS", imageUrl: "/exercises/BarbellCurl.jpg" },
+  "Dumbbell Curl": { muscleGroup: "BICEPS", imageUrl: "/exercises/DumbbellCurl.jpg" },
+  "Hammer Curls": { muscleGroup: "BICEPS", imageUrl: "/exercises/HammerCurls.jpg" },
+  "Leg Press Machine": { muscleGroup: "LEGS", imageUrl: "/exercises/LegPressMachine.jpg" },
+  "Leg Extension Machine": { muscleGroup: "LEGS", imageUrl: "/exercises/LegExtensionMachine.jpg" },
+  "Cable Shrugs": { muscleGroup: "TRAPS", imageUrl: "/exercises/CableShrugs.jpg" },
+  "Dumbbell Shrugs": { muscleGroup: "TRAPS", imageUrl: "/exercises/DumbbellShrugs.jpg" },
+  "Forearm Curls": { muscleGroup: "FOREARMS", imageUrl: "/exercises/ForearmCurls.jpg" },
+  // Fallbacks for standard names if not in seed
+  "Bench Press": { muscleGroup: "CHEST", imageUrl: null },
+  "Squat": { muscleGroup: "LEGS", imageUrl: null },
+};
+
 const defaultPlanBySplit = {
   AB: [
     {
@@ -9,11 +34,11 @@ const defaultPlanBySplit = {
       label: "Upper (Chest/Shoulders/Triceps)",
       muscles: "Chest, Shoulders, Triceps",
       exercises: [
-        "Bench Press",
-        "Incline Dumbbell Press",
-        "Shoulder Press",
-        "Lateral Raise",
-        "Triceps Pushdown",
+        "Chest Press Machine",
+        "Dumbbell Fly",
+        "Side Lateral Raises",
+        "Triceps Pushdown Machine",
+        "Dumbbell Overhead Triceps Extension"
       ],
     },
     {
@@ -21,12 +46,12 @@ const defaultPlanBySplit = {
       label: "Lower & Back",
       muscles: "Legs, Back, Biceps",
       exercises: [
-        "Squat",
-        "Romanian Deadlift",
-        "Leg Press",
-        "Lat Pulldown",
-        "Barbell Row",
-        "Biceps Curl",
+        "Leg Press Machine",
+        "Leg Extension Machine",
+        "Machine Lat Pulldown",
+        "Machine Row",
+        "Dumbbell Curl",
+        "Hammer Curls",
       ],
     },
   ],
@@ -72,8 +97,8 @@ const defaultPlanBySplit = {
       ],
     },
   ],
-
-  // TODO: ABCD, FULL_BODY later
+  ABCD: [], // Add if needed
+  FULL_BODY: [] // Add if needed
 };
 
 async function generateDefaultPlan(req, res) {
@@ -91,7 +116,8 @@ async function generateDefaultPlan(req, res) {
     const planType = user.planType;
     const template = defaultPlanBySplit[planType];
 
-    if (!template) {
+    if (!template || template.length === 0) {
+      // Fallback if specific split not defined above
       return res.status(400).json({
         message: `No default template defined for split ${planType}`,
       });
@@ -99,11 +125,7 @@ async function generateDefaultPlan(req, res) {
 
     // Clear existing plan for this user (if any)
     await prisma.userTrainingDayExercise.deleteMany({
-      where: {
-        trainingDay: {
-          userId: userId,
-        },
-      },
+      where: { trainingDay: { userId: userId } },
     });
 
     await prisma.userTrainingDay.deleteMany({
@@ -126,6 +148,7 @@ async function generateDefaultPlan(req, res) {
     
       for (let i = 0; i < day.exercises.length; i++) {
         const name = day.exercises[i];
+        const knownData = EXERCISE_DATA[name];
     
         let exercise = await prisma.exercise.findFirst({
           where: {
@@ -138,14 +161,17 @@ async function generateDefaultPlan(req, res) {
         });
     
         if (!exercise) {
-          const muscleGroup = getMuscleGroupForExercise(day.dayKey);
+          // ✅ FIX: Use known metadata if available
+          const muscleGroup = knownData?.muscleGroup || getMuscleGroupForExercise(day.dayKey);
+          const imageUrl = knownData?.imageUrl || null;
     
           exercise = await prisma.exercise.create({
             data: {
               name,
               createdByUserId: userId,
-              muscleGroup,   // 👈 REQUIRED
-              // if your enum is different, make sure 'muscleGroup' value matches
+              muscleGroup,
+              imageUrl, // ✅ Populating image here!
+              isGlobal: false,
             },
           });
         }
@@ -185,17 +211,13 @@ async function generateDefaultPlan(req, res) {
   }
 }
 
-// Helper: guess muscle group by dayKey
+// Helper: guess muscle group by dayKey (Fallback)
 function getMuscleGroupForExercise(dayKey) {
   switch (dayKey) {
-    case "A":
-      return "CHEST";      // or "UPPER", "PUSH", etc. → must match your enum
-    case "B":
-      return "BACK";       // or "PULL"
-    case "C":
-      return "LEGS";
-    default:
-      return "CHEST";      // fallback
+    case "A": return "CHEST";
+    case "B": return "BACK";
+    case "C": return "LEGS";
+    default: return "CHEST";
   }
 }
 
@@ -287,7 +309,7 @@ async function getMyPlan(req, res) {
         exercises: {
           orderBy: { orderIndex: "asc" },
           include: {
-            exercise: true, // ✅ important (to get muscleGroup)
+            exercise: true, 
           },
         },
       },
@@ -303,7 +325,7 @@ async function getMyPlan(req, res) {
 
         return {
           dayKey: d.dayKey,
-          muscleGroups,          // ✅ now PlanBuilder can show exercises
+          muscleGroups,          
           exerciseIds,
         };
       }),
@@ -348,9 +370,6 @@ async function getCurrentPlan(req, res) {
     return res.status(500).json({ message: "Failed to load current plan" });
   }
 }
-
-
-
 
 module.exports = {
   generateDefaultPlan,
