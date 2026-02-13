@@ -20,12 +20,6 @@ function getNextDayKey({ planType, lastDayKey }) {
 
 /**
  * GET /workout/today
- * Returns:
- * - planType
- * - dayKeys
- * - recommendedDayKey
- * - lastCompletedDayKey
- * - activeWorkout (Latest PLANNED workout, regardless of when it was created)
  */
 async function getTodayWorkout(req, res) {
   try {
@@ -58,7 +52,6 @@ async function getTodayWorkout(req, res) {
       lastDayKey: lastCompleted?.planDay || null,
     });
 
-    // ✅ CHANGED: Removed "createdAt" filter. Finds ANY active workout.
     const active = await prisma.workout.findFirst({
       where: {
         userId,
@@ -83,10 +76,7 @@ async function getTodayWorkout(req, res) {
 
 /**
  * POST /workout/start
- * Body: { dayKey?: "A"|"B"|"C"|"D"|"FULL" }
- *
- * If there is ANY active workout -> 409 and return it (Resume).
- * Else create new PLANNED workout.
+ * ✅ UPDATED: Populates exercises IMMEDIATELY to prevent race conditions.
  */
 async function startWorkout(req, res) {
   try {
@@ -106,7 +96,7 @@ async function startWorkout(req, res) {
 
     const dayKeys = getDayKeys(user.planType);
 
-    // ✅ CHANGED: Check for ANY active workout to prevent duplicates
+    // Check for active workout
     const active = await prisma.workout.findFirst({
       where: { userId, status: "PLANNED" },
       orderBy: { createdAt: "desc" },
@@ -139,24 +129,48 @@ async function startWorkout(req, res) {
       });
     }
 
+    // ✅ 1. FETCH THE PLAN FIRST
+    const trainingDay = await prisma.userTrainingDay.findFirst({
+      where: { userId, dayKey: chosen },
+      include: {
+        exercises: {
+          orderBy: { orderIndex: "asc" },
+        },
+      },
+    });
+
+    if (!trainingDay) {
+      return res.status(400).json({ message: `No plan found for Day ${chosen}. Please configure your plan.` });
+    }
+
+    // ✅ 2. CREATE WORKOUT + EXERCISES IN ONE TRANSACTION
     const workout = await prisma.workout.create({
       data: {
         userId,
         date: new Date(),
         planDay: chosen,
         status: "PLANNED",
+        // Magic happens here:
+        exercises: {
+          create: trainingDay.exercises.map((row) => ({
+            exerciseId: row.exerciseId,
+            plannedExerciseId: row.exerciseId,
+            orderIndex: row.orderIndex,
+            targetSets: 0,
+            isSubstitution: false,
+          })),
+        },
       },
+      select: {
+        id: true,
+        planDay: true,
+        status: true,
+        date: true,
+        createdAt: true,
+      }
     });
 
-    return res.status(201).json({
-      workout: {
-        id: workout.id,
-        planDay: workout.planDay,
-        status: workout.status,
-        date: workout.date,
-        createdAt: workout.createdAt,
-      },
-    });
+    return res.status(201).json({ workout });
   } catch (err) {
     console.error("startWorkout error:", err);
     return res.status(500).json({ message: "Failed to start workout" });
@@ -165,13 +179,11 @@ async function startWorkout(req, res) {
 
 /**
  * POST /workout/abandon
- * Deletes the active workout (latest PLANNED).
  */
 async function abandonActiveWorkout(req, res) {
   try {
     const userId = req.user.id;
 
-    // ✅ CHANGED: Removed date filter. Finds latest PLANNED workout.
     const active = await prisma.workout.findFirst({
       where: { userId, status: "PLANNED" },
       orderBy: { createdAt: "desc" },
@@ -184,13 +196,13 @@ async function abandonActiveWorkout(req, res) {
       });
     }
 
-    // delete sets -> workoutExercises -> workout
+    // Cleanup (Cascading deletes usually handle this, but manual safety here)
     await prisma.set.deleteMany({
-      where: {
-        workoutExercise: {
-          workoutId: active.id,
-        },
-      },
+      where: { workoutExercise: { workoutId: active.id } },
+    });
+    
+    await prisma.dropSetGroup.deleteMany({
+        where: { workoutExercise: { workoutId: active.id } },
     });
 
     await prisma.workoutExercise.deleteMany({
