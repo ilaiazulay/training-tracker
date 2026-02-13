@@ -21,7 +21,6 @@ function workoutLabel(k) {
   return `Workout ${k}`;
 }
 
-// Helper to calculate minutes since creation
 function minutesSince(isoOrDate) {
   if (!isoOrDate) return null;
   const created = new Date(isoOrDate).getTime();
@@ -46,7 +45,6 @@ export default function Home() {
 
   const confirmNewWorkout = useModal();
 
-  // Timer to update "X minutes ago"
   const [minuteTick, setMinuteTick] = useState(0);
   useEffect(() => {
     const t = setInterval(() => setMinuteTick((x) => x + 1), 60000);
@@ -102,7 +100,7 @@ export default function Home() {
   const activeWorkout = today?.activeWorkout || null;
   const activeWorkoutId = activeWorkout?.id || null;
 
-  // Fetch full details of the active workout so we can pass it to the next screen
+  // Background fetch of the full active workout
   useEffect(() => {
     if (!token || !activeWorkoutId) {
       setActiveWorkoutFull(null);
@@ -131,8 +129,6 @@ export default function Home() {
     };
   }, [token, activeWorkoutId]);
 
-  // ✅ CHANGED: Removed "isFromToday" check.
-  // Any active workout (status=PLANNED) counts as "Active" now.
   const hasActiveSession = !!activeWorkoutId;
   const hasActiveForSelected =
     hasActiveSession && activeWorkout?.planDay === selectedWorkout;
@@ -163,9 +159,9 @@ export default function Home() {
 
   async function onContinue() {
     if (activeWorkoutId) {
-      // ✅ CHANGED: Pass 'activeWorkoutFull' in state for Instant Load
+      // Pass the fully loaded object so the next screen renders instantly
       nav(`/workout/${activeWorkoutId}`, {
-        state: { initialWorkout: activeWorkoutFull },
+        state: activeWorkoutFull ? { initialWorkout: activeWorkoutFull } : undefined,
       });
     }
   }
@@ -211,7 +207,7 @@ export default function Home() {
 
       const data = await res.json().catch(() => ({}));
 
-      // ✅ CHANGED: If backend returns 409 (resume), pass data to nav
+      // Resume case (409)
       if (res.status === 409 && data.workout?.id) {
         nav(`/workout/${data.workout.id}`, {
           state: { initialWorkout: data.workout },
@@ -223,7 +219,7 @@ export default function Home() {
 
       await loadHome();
       
-      // ✅ CHANGED: Pass new workout data to nav
+      // New workout case
       nav(`/workout/${data.workout.id}`, {
         state: { initialWorkout: data.workout },
       });
@@ -323,19 +319,21 @@ export default function Home() {
           <button
             type="button"
             onClick={confirmNewWorkout.close}
-            className="flex-1 py-2.5 rounded-2xl border border-white/15 bg-white/5 text-white text-sm hover:bg-white/10 transition"
+            disabled={busy}
+            className="flex-1 py-2.5 rounded-2xl border border-white/15 bg-white/5 text-white text-sm hover:bg-white/10 transition disabled:opacity-60"
           >
             Cancel
           </button>
 
           <button
             type="button"
+            disabled={busy}
             onClick={async () => {
               confirmNewWorkout.close();
               await discardActiveWorkout();
               startWorkout();
             }}
-            className="flex-1 py-2.5 rounded-2xl bg-red-500 text-white text-sm font-semibold hover:bg-red-400 transition"
+            className="flex-1 py-2.5 rounded-2xl bg-red-500 text-white text-sm font-semibold hover:bg-red-400 transition disabled:opacity-60"
           >
             Discard & start
           </button>
