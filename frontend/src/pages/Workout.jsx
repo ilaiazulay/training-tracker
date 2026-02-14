@@ -96,9 +96,10 @@ export default function Workout() {
 
   const [draft, setDraft] = useState({});
 
-  // ✅ NEW: Highlight State for Validation Animations
-  const [highlightSetId, setHighlightSetId] = useState(null); // For Normal Sets
-  const [highlightDropMain, setHighlightDropMain] = useState(false); // For Drop Modal
+  // Highlights
+  const [highlightSetId, setHighlightSetId] = useState(null); 
+  const [highlightDropMain, setHighlightDropMain] = useState(false);
+  const [highlightDropPartIndex, setHighlightDropPartIndex] = useState(null); // ✅ NEW
 
   // Modals
   const [dropOpenForWE, setDropOpenForWE] = useState(null);
@@ -115,8 +116,6 @@ export default function Workout() {
   const [switchError, setSwitchError] = useState("");
 
   const lastAddedSetIdRef = useRef(null);
-  
-  // Refs for auto-focusing inputs
   const inputRefs = useRef({}); 
 
   function logout() {
@@ -224,17 +223,12 @@ export default function Workout() {
 
   // --- ACTIONS ---
 
-  // ✅ HELPER: Triggers shake animation on a set
   function triggerHighlight(setId, type = 'weight') {
     setHighlightSetId(setId);
-    
-    // Auto-focus the empty input if possible
-    const key = `${setId}-${type}`; // e.g. "105-weight"
+    const key = `${setId}-${type}`; 
     if (inputRefs.current[key]) {
         inputRefs.current[key].focus();
     }
-
-    // Remove highlight class after animation finishes (500ms)
     setTimeout(() => {
         setHighlightSetId(null);
     }, 600);
@@ -246,7 +240,7 @@ export default function Workout() {
 
       const we = exercises.find((x) => x.id === workoutExerciseId);
       
-      // ✅ VALIDATION: Check previous set
+      // Validation: Check previous set
       if (we?.normalSets?.length > 0) {
         const last = we.normalSets[we.normalSets.length - 1];
         if (!last.weight || Number(last.weight) === 0) {
@@ -448,7 +442,8 @@ export default function Workout() {
     const prefill = prefillFromLastBest(last);
     
     setDropOpenForWE(workoutExerciseId);
-    setHighlightDropMain(false); // Reset highlight
+    setHighlightDropMain(false);
+    setHighlightDropPartIndex(null);
     
     setDropMain({
       weight: prefill.weight ? String(prefill.weight) : "",
@@ -465,18 +460,31 @@ export default function Workout() {
       const mainW = Number(dropMain.weight);
       const mainR = Number(dropMain.reps);
 
-      // ✅ VALIDATION: Highlight Main Set if empty
+      // 1. Validation: Main Set
       if (!dropMain.weight || !dropMain.reps || mainW === 0 || mainR === 0) {
         setHighlightDropMain(true);
-        setTimeout(() => setHighlightDropMain(false), 600); // Remove shake class
+        setTimeout(() => setHighlightDropMain(false), 600);
         return; 
       }
 
-      setSavingDrop(true);
-
+      // 2. Filter Valid Drops (Must have weight & reps)
       const cleanDrops = dropParts
-        .filter((p) => String(p.weight).trim() !== "" || String(p.reps).trim() !== "")
+        .filter((p) => p.weight && p.reps && Number(p.weight) > 0 && Number(p.reps) > 0)
         .map((p) => ({ weight: Number(p.weight), reps: Number(p.reps) }));
+
+      // 3. Validation: At least one drop required
+      if (cleanDrops.length === 0) {
+        // If user deleted all rows, add one back
+        if (dropParts.length === 0) {
+            setDropParts([{ weight: "", reps: "" }]);
+        }
+        // Highlight the first drop row
+        setHighlightDropPartIndex(0); 
+        setTimeout(() => setHighlightDropPartIndex(null), 600);
+        return;
+      }
+
+      setSavingDrop(true);
 
       const res = await fetch(`${API_BASE_URL}/workouts/${id}/dropsets`, {
         method: "POST",
@@ -519,12 +527,11 @@ export default function Workout() {
       setError("");
       setCompleting(true);
 
-      // ✅ VALIDATION: Scan for incomplete sets
+      // Validation: Scan complete sets
       if (workout?.exercises) {
         for (const we of workout.exercises) {
             for (const s of (we.sets || [])) {
                 if (s.weight === 0 || s.reps === 0) {
-                    // Scroll to the error and highlight it
                     const element = document.getElementById(`set-${s.id}`);
                     if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' });
                     triggerHighlight(s.id, s.weight === 0 ? 'weight' : 'reps');
@@ -625,7 +632,6 @@ export default function Workout() {
 
   return (
     <>
-      {/* SHAKE ANIMATION KEYFRAMES */}
       <style>{`
         @keyframes shake {
           0%, 100% { transform: translateX(0); }
@@ -748,7 +754,7 @@ export default function Workout() {
                             >
                               <div className="text-xs text-slate-300 w-10">#{s.setIndex + 1}</div>
                               <input
-                                ref={el => inputRefs.current[`${s.id}-weight`] = el} // Ref for auto-focus
+                                ref={el => inputRefs.current[`${s.id}-weight`] = el} 
                                 className="w-20 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40 placeholder-white/20"
                                 type="text" inputMode="decimal" pattern="[0-9]*[.,]?[0-9]*"
                                 placeholder="0"
@@ -759,7 +765,7 @@ export default function Workout() {
                               />
                               <div className="text-xs text-slate-400">kg</div>
                               <input
-                                ref={el => inputRefs.current[`${s.id}-reps`] = el} // Ref for auto-focus
+                                ref={el => inputRefs.current[`${s.id}-reps`] = el} 
                                 className="w-16 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40 placeholder-white/20"
                                 type="text" inputMode="numeric" pattern="[0-9]*"
                                 placeholder="0"
@@ -847,13 +853,23 @@ export default function Workout() {
             </div>
             <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
               <div className="flex items-center justify-between mb-2">
-                <div className="text-xs text-slate-300">Drops</div>
+                <div className="text-xs text-slate-300">Drops (Min 1)</div>
                 <button type="button" onClick={() => setDropParts((arr) => [...arr, { weight: "", reps: "" }])} className="text-xs px-2 py-1 rounded-lg border border-white/15 bg-white/5 text-white hover:bg-white/10 transition">+ Add drop</button>
               </div>
               <div className="space-y-2">
                 <AnimatePresence initial={false} mode="popLayout">
                   {dropParts.map((p, idx) => (
-                    <motion.div key={idx} layout initial={{ opacity: 0, y: 8, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -8, scale: 0.96 }} transition={{ duration: 0.16, ease: "easeOut" }} className="flex items-center gap-2">
+                    <motion.div 
+                        key={idx} 
+                        layout 
+                        initial={{ opacity: 0, y: 8, scale: 0.98 }} 
+                        animate={{ opacity: 1, y: 0, scale: 1 }} 
+                        exit={{ opacity: 0, y: -8, scale: 0.96 }} 
+                        transition={{ duration: 0.16, ease: "easeOut" }} 
+                        className={`flex items-center gap-2 rounded-xl p-1 border border-transparent transition-colors ${
+                            highlightDropPartIndex === idx ? "animate-shake border-red-500/50 bg-red-500/10" : ""
+                        }`}
+                    >
                       <input className="w-24 bg-white/5 border border-white/15 rounded-xl px-2 py-2 text-sm text-white outline-none focus:border-white/40" type="number" step="0.5" placeholder="kg" value={p.weight} onChange={(e) => setDropParts((arr) => arr.map((x, i) => (i === idx ? { ...x, weight: e.target.value } : x)))} />
                       <input className="w-24 bg-white/5 border border-white/15 rounded-xl px-2 py-2 text-sm text-white outline-none focus:border-white/40" type="number" placeholder="reps" value={p.reps} onChange={(e) => setDropParts((arr) => arr.map((x, i) => (i === idx ? { ...x, reps: e.target.value } : x)))} />
                       <button type="button" className="ml-auto text-xs text-red-300 hover:text-red-200 transition" onClick={() => setDropParts((arr) => arr.filter((_, i) => i !== idx))} title="Remove drop">Remove</button>
