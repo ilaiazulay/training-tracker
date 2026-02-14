@@ -10,6 +10,7 @@ import { getAuthData, clearAuthData } from "../auth";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
+// --- HELPERS ---
 function prettyMuscle(muscleGroup) {
   if (!muscleGroup) return "";
   return String(muscleGroup).replaceAll("_", " ").toLowerCase();
@@ -40,9 +41,13 @@ function prefillFromLastBest(last) {
   return { weight: 0, reps: 0 };
 }
 
-// Helpers
 function keyForSet(weId, setIndex, field) {
   return `${weId}:${setIndex}:${field}`;
+}
+
+function formatInputVal(val) {
+  if (val === 0 || val === "0") return "";
+  return val;
 }
 
 function onlyNumberLike(value, { allowDecimal }) {
@@ -54,7 +59,6 @@ function onlyNumberLike(value, { allowDecimal }) {
   return parts.length <= 1 ? cleaned : `${parts[0]}.${parts.slice(1).join("")}`;
 }
 
-// Helper to ensure every set has a stable local key
 function ensureLocalIds(w) {
   if (!w?.exercises) return w;
   const copy = structuredClone(w);
@@ -75,8 +79,7 @@ export default function Workout() {
   const authData = getAuthData();
   const accessToken = authData?.tokens?.accessToken;
 
-  // 1. Setup State
-  // Use initial data passed from Home if available
+  // --- STATE ---
   const initialData = location.state?.initialWorkout;
   const hasValidInitialData = initialData && Array.isArray(initialData.exercises);
 
@@ -84,7 +87,6 @@ export default function Workout() {
     hasValidInitialData ? ensureLocalIds(initialData) : null
   );
   
-  // Separate state for stats (loaded lazily)
   const [stats, setStats] = useState({});
   const [statsLoading, setStatsLoading] = useState(true);
 
@@ -93,6 +95,10 @@ export default function Workout() {
   const [completing, setCompleting] = useState(false);
 
   const [draft, setDraft] = useState({});
+
+  // ✅ NEW: Highlight State for Validation Animations
+  const [highlightSetId, setHighlightSetId] = useState(null); // For Normal Sets
+  const [highlightDropMain, setHighlightDropMain] = useState(false); // For Drop Modal
 
   // Modals
   const [dropOpenForWE, setDropOpenForWE] = useState(null);
@@ -109,6 +115,9 @@ export default function Workout() {
   const [switchError, setSwitchError] = useState("");
 
   const lastAddedSetIdRef = useRef(null);
+  
+  // Refs for auto-focusing inputs
+  const inputRefs = useRef({}); 
 
   function logout() {
     clearAuthData();
@@ -116,8 +125,6 @@ export default function Workout() {
   }
 
   // --- API CALLS ---
-
-  // 1. Fast: Load Workout Structure
   async function fetchWorkout() {
     const res = await fetch(`${API_BASE_URL}/workouts/${id}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -127,7 +134,6 @@ export default function Workout() {
     return ensureLocalIds(data.workout);
   }
 
-  // 2. Slow: Load Stats in Background
   async function fetchStats() {
     try {
       const res = await fetch(`${API_BASE_URL}/workouts/${id}/stats`, {
@@ -144,7 +150,6 @@ export default function Workout() {
     }
   }
 
-  // Initial Load Effect
   useEffect(() => {
     if (!authData) {
       nav("/");
@@ -157,8 +162,6 @@ export default function Workout() {
     (async () => {
       try {
         setError("");
-        
-        // If we don't have workout data yet, fetch it
         if (!workout) {
             setLoading(true);
             const w = await fetchWorkout();
@@ -167,14 +170,9 @@ export default function Workout() {
                 setLoading(false);
             }
         } else {
-            // Even if we have data passed from Home, refreshes ensure sync
-            // (Optional: you can skip this if you trust Home data completely)
             fetchWorkout().then(w => !cancelled && setWorkout(w)).catch(() => {});
         }
-
-        // Always fetch stats separately
         if (!cancelled) fetchStats();
-
       } catch (e) {
         if (!cancelled) setError(e.message);
         setLoading(false);
@@ -182,10 +180,8 @@ export default function Workout() {
     })();
 
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, accessToken, nav]);
 
-  // Fallback refresh (still used for complex operations like drop set creation)
   async function refreshWorkout() {
     try {
       const w = await fetchWorkout();
@@ -228,18 +224,48 @@ export default function Workout() {
 
   // --- ACTIONS ---
 
+  // ✅ HELPER: Triggers shake animation on a set
+  function triggerHighlight(setId, type = 'weight') {
+    setHighlightSetId(setId);
+    
+    // Auto-focus the empty input if possible
+    const key = `${setId}-${type}`; // e.g. "105-weight"
+    if (inputRefs.current[key]) {
+        inputRefs.current[key].focus();
+    }
+
+    // Remove highlight class after animation finishes (500ms)
+    setTimeout(() => {
+        setHighlightSetId(null);
+    }, 600);
+  }
+
   async function addNormalSet(workoutExerciseId, exerciseId) {
     try {
       setError("");
-      const statsData = getStatsForExercise(exerciseId); // Use loaded stats
-      const last = statsData?.last;
-      const prefill = prefillFromLastBest(last);
 
       const we = exercises.find((x) => x.id === workoutExerciseId);
+      
+      // ✅ VALIDATION: Check previous set
+      if (we?.normalSets?.length > 0) {
+        const last = we.normalSets[we.normalSets.length - 1];
+        if (!last.weight || Number(last.weight) === 0) {
+            triggerHighlight(last.id || last._localId, 'weight');
+            return;
+        }
+        if (!last.reps || Number(last.reps) === 0) {
+            triggerHighlight(last.id || last._localId, 'reps');
+            return;
+        }
+      }
+
+      const statsData = getStatsForExercise(exerciseId);
+      const lastStat = statsData?.last;
+      const prefill = prefillFromLastBest(lastStat);
+
       const lastNormal = we?.normalSets?.length ? we.normalSets[we.normalSets.length - 1] : null;
       const nextIndex = lastNormal ? lastNormal.setIndex + 1 : 0;
 
-      // Optimistic Update
       const tempId = `temp-${Date.now()}`; 
       const newSet = {
         id: tempId,
@@ -279,7 +305,6 @@ export default function Workout() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || "Failed to add set");
 
-      // Swap temp ID with real ID
       if (data?.set?.id) {
         setWorkout((prev) => {
             const next = structuredClone(prev);
@@ -349,18 +374,14 @@ export default function Workout() {
       setWorkout((prev) => {
         const next = structuredClone(prev);
         for(const we of next.exercises) {
-            if (we.sets) {
-                we.sets = we.sets.filter(s => s.id !== setId);
-            }
+            if (we.sets) we.sets = we.sets.filter(s => s.id !== setId);
         }
         return next;
       });
-
       const res = await fetch(`${API_BASE_URL}/workouts/${id}/sets/${setId}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${accessToken}` },
       });
-
       if (!res.ok) throw new Error("Failed to delete set");
     } catch (e) {
       setError(e.message);
@@ -368,7 +389,6 @@ export default function Workout() {
     }
   }
 
-  // Drafts
   function getDraftValue(weId, setIndex, field, fallback) {
     const k = keyForSet(weId, setIndex, field);
     return draft[k] ?? String(fallback ?? "");
@@ -426,7 +446,10 @@ export default function Workout() {
     const statsData = getStatsForExercise(exerciseId);
     const last = statsData?.last;
     const prefill = prefillFromLastBest(last);
+    
     setDropOpenForWE(workoutExerciseId);
+    setHighlightDropMain(false); // Reset highlight
+    
     setDropMain({
       weight: prefill.weight ? String(prefill.weight) : "",
       reps: prefill.reps ? String(prefill.reps) : "",
@@ -438,9 +461,19 @@ export default function Workout() {
     if (!dropOpenForWE) return;
     try {
       setError("");
-      setSavingDrop(true);
+      
       const mainW = Number(dropMain.weight);
       const mainR = Number(dropMain.reps);
+
+      // ✅ VALIDATION: Highlight Main Set if empty
+      if (!dropMain.weight || !dropMain.reps || mainW === 0 || mainR === 0) {
+        setHighlightDropMain(true);
+        setTimeout(() => setHighlightDropMain(false), 600); // Remove shake class
+        return; 
+      }
+
+      setSavingDrop(true);
+
       const cleanDrops = dropParts
         .filter((p) => String(p.weight).trim() !== "" || String(p.reps).trim() !== "")
         .map((p) => ({ weight: Number(p.weight), reps: Number(p.reps) }));
@@ -485,14 +518,35 @@ export default function Workout() {
     try {
       setError("");
       setCompleting(true);
+
+      // ✅ VALIDATION: Scan for incomplete sets
+      if (workout?.exercises) {
+        for (const we of workout.exercises) {
+            for (const s of (we.sets || [])) {
+                if (s.weight === 0 || s.reps === 0) {
+                    // Scroll to the error and highlight it
+                    const element = document.getElementById(`set-${s.id}`);
+                    if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    triggerHighlight(s.id, s.weight === 0 ? 'weight' : 'reps');
+                    setCompleting(false);
+                    return; 
+                }
+            }
+        }
+      }
+
       const res = await fetch(`${API_BASE_URL}/workouts/${id}/complete`, {
         method: "POST",
         headers: { Authorization: `Bearer ${accessToken}` },
       });
-      if (!res.ok) throw new Error("Failed to complete workout");
+      const data = await res.json();
+      
+      if (!res.ok) throw new Error(data.message || "Failed to complete workout");
+      
       nav("/home");
     } catch (e) {
       setError(e.message);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     } finally {
       setCompleting(false);
     }
@@ -571,6 +625,20 @@ export default function Workout() {
 
   return (
     <>
+      {/* SHAKE ANIMATION KEYFRAMES */}
+      <style>{`
+        @keyframes shake {
+          0%, 100% { transform: translateX(0); }
+          25% { transform: translateX(-4px); }
+          75% { transform: translateX(4px); }
+        }
+        .animate-shake {
+          animation: shake 0.3s cubic-bezier(.36,.07,.19,.97) both;
+          border-color: #ef4444 !important; /* Red border */
+          background-color: rgba(239, 68, 68, 0.1) !important; /* Red tint */
+        }
+      `}</style>
+
       <button
         type="button"
         onClick={logout}
@@ -633,7 +701,6 @@ export default function Workout() {
                         <div className="text-[11px] text-slate-400">{prettyMuscle(we.exercise?.muscleGroup)}</div>
                         {isSwitched && <div className="text-[11px] text-slate-400 mt-1">Planned: <span className="text-slate-200">{plannedName}</span></div>}
                         
-                        {/* Stats Badges */}
                         <div className="flex flex-wrap gap-2 mt-2">
                           {statsLoading ? (
                              <div className="text-[10px] text-slate-500 animate-pulse">Loading history...</div>
@@ -657,10 +724,13 @@ export default function Workout() {
                       <AnimatePresence initial={false} mode="popLayout">
                         {we.normalSets.map((s) => {
                           const isJustAdded = lastAddedSetIdRef.current && s.id === lastAddedSetIdRef.current;
-                          // Stable key ensures optimistic update doesn't flicker
+                          const isHighlighted = highlightSetId === s.id;
+                          const localId = s._localId || s.id;
+
                           return (
                             <motion.div
-                              key={s._localId || s.id}
+                              id={`set-${s.id}`} 
+                              key={localId}
                               layout
                               initial={{ opacity: 0, y: 10, scale: 0.98 }}
                               animate={{
@@ -672,22 +742,28 @@ export default function Workout() {
                               exit={{ opacity: 0, y: -8, scale: 0.96 }}
                               transition={{ duration: 0.18, ease: "easeOut" }}
                               onAnimationComplete={() => { if (isJustAdded) lastAddedSetIdRef.current = null; }}
-                              className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2"
+                              className={`flex items-center gap-2 rounded-xl border px-3 py-2 transition-colors ${
+                                isHighlighted ? "animate-shake" : "border-white/10 bg-white/5"
+                              }`}
                             >
                               <div className="text-xs text-slate-300 w-10">#{s.setIndex + 1}</div>
                               <input
-                                className="w-20 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40"
+                                ref={el => inputRefs.current[`${s.id}-weight`] = el} // Ref for auto-focus
+                                className="w-20 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40 placeholder-white/20"
                                 type="text" inputMode="decimal" pattern="[0-9]*[.,]?[0-9]*"
-                                value={getDraftValue(we.id, s.setIndex, "weight", s.weight)}
+                                placeholder="0"
+                                value={formatInputVal(getDraftValue(we.id, s.setIndex, "weight", s.weight))}
                                 onChange={(e) => { const v = onlyNumberLike(e.target.value, { allowDecimal: true }).replace(",", "."); setDraftValue(we.id, s.setIndex, "weight", v); }}
                                 onBlur={() => commitDraft(we.id, s.setIndex, s)}
                                 onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
                               />
                               <div className="text-xs text-slate-400">kg</div>
                               <input
-                                className="w-16 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40"
+                                ref={el => inputRefs.current[`${s.id}-reps`] = el} // Ref for auto-focus
+                                className="w-16 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40 placeholder-white/20"
                                 type="text" inputMode="numeric" pattern="[0-9]*"
-                                value={getDraftValue(we.id, s.setIndex, "reps", s.reps)}
+                                placeholder="0"
+                                value={formatInputVal(getDraftValue(we.id, s.setIndex, "reps", s.reps))}
                                 onChange={(e) => { const v = onlyNumberLike(e.target.value, { allowDecimal: false }); setDraftValue(we.id, s.setIndex, "reps", v); }}
                                 onBlur={() => commitDraft(we.id, s.setIndex, s)}
                                 onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
@@ -714,18 +790,34 @@ export default function Workout() {
                                 {g.main && (
                                    <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2">
                                       <div className="text-[11px] text-emerald-200 w-12">Main</div>
-                                      <input className="w-20 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40" type="number" step="0.5" value={g.main.weight} onChange={(e) => updateAnySetById(g.main.id, e.target.value, g.main.reps)} />
+                                      <input className="w-20 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40 placeholder-white/20" 
+                                        type="number" step="0.5" 
+                                        placeholder="0"
+                                        value={formatInputVal(g.main.weight)} 
+                                        onChange={(e) => updateAnySetById(g.main.id, e.target.value, g.main.reps)} />
                                       <div className="text-xs text-slate-200">kg</div>
-                                      <input className="w-16 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40" type="number" value={g.main.reps} onChange={(e) => updateAnySetById(g.main.id, g.main.weight, e.target.value)} />
+                                      <input className="w-16 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40 placeholder-white/20" 
+                                        type="number" 
+                                        placeholder="0"
+                                        value={formatInputVal(g.main.reps)} 
+                                        onChange={(e) => updateAnySetById(g.main.id, g.main.weight, e.target.value)} />
                                       <div className="text-xs text-slate-200">reps</div>
                                    </div>
                                 )}
                                 {g.parts.map((p, idx) => (
                                    <div key={p.id} className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2">
                                       <div className="text-[11px] text-emerald-200 w-12">Drop {idx + 1}</div>
-                                      <input className="w-20 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40" type="number" step="0.5" value={p.weight} onChange={(e) => updateAnySetById(p.id, e.target.value, p.reps)} />
+                                      <input className="w-20 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40 placeholder-white/20" 
+                                        type="number" step="0.5" 
+                                        placeholder="0"
+                                        value={formatInputVal(p.weight)} 
+                                        onChange={(e) => updateAnySetById(p.id, e.target.value, p.reps)} />
                                       <div className="text-xs text-slate-200">kg</div>
-                                      <input className="w-16 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40" type="number" value={p.reps} onChange={(e) => updateAnySetById(p.id, p.weight, e.target.value)} />
+                                      <input className="w-16 bg-white/5 border border-white/15 rounded-xl px-2 py-1.5 text-sm text-white outline-none focus:border-white/40 placeholder-white/20" 
+                                        type="number" 
+                                        placeholder="0"
+                                        value={formatInputVal(p.reps)} 
+                                        onChange={(e) => updateAnySetById(p.id, p.weight, e.target.value)} />
                                       <div className="text-xs text-slate-200">reps</div>
                                    </div>
                                 ))}
@@ -746,8 +838,8 @@ export default function Workout() {
         {/* Drop Set Modal */}
         <Modal open={!!dropOpenForWE} title="Add drop set" description="Main set + optional drops" onClose={() => setDropOpenForWE(null)} variant="center">
           <div className="space-y-3">
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-              <div className="text-xs text-slate-300 mb-2">Main</div>
+            <div className={`rounded-2xl border p-3 transition-colors ${highlightDropMain ? "animate-shake border-red-500/50 bg-red-500/10" : "border-white/10 bg-white/5"}`}>
+              <div className="text-xs text-slate-300 mb-2">Main (Required)</div>
               <div className="flex items-center gap-2">
                 <input className="w-24 bg-white/5 border border-white/15 rounded-xl px-2 py-2 text-sm text-white outline-none focus:border-white/40" type="number" step="0.5" placeholder="kg" value={dropMain.weight} onChange={(e) => setDropMain((x) => ({ ...x, weight: e.target.value }))} />
                 <input className="w-24 bg-white/5 border border-white/15 rounded-xl px-2 py-2 text-sm text-white outline-none focus:border-white/40" type="number" placeholder="reps" value={dropMain.reps} onChange={(e) => setDropMain((x) => ({ ...x, reps: e.target.value }))} />
@@ -777,7 +869,7 @@ export default function Workout() {
           </div>
         </Modal>
 
-        {/* Switch Exercise Modal */}
+        {/* Switch Modal */}
         <Modal open={switchOpen} title="Switch exercise" description={switchForWE ? `Choose a replacement for "${switchForWE.exercise?.name}".` : ""} onClose={closeSwitchModal} variant="center">
           <div className="space-y-3">
              {switchError && <div className="rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">{switchError}</div>}
